@@ -1,0 +1,31 @@
+{
+  "name": "eternal-realms",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "test": "vitest run",
+    "desktop": "electron .",
+    "package:desktop": "npm run build && node scripts/package-desktop.mjs",
+    "start": "npm run build && electron .",
+    "test:e2e": "playwright test",
+    "test:desktop": "node scripts/smoke-desktop.mjs"
+  },
+  "dependencies": {
+    "@dimforge/rapier3d-compat": "^0.19.3",
+    "three": "^0.180.0"
+  },
+  "devDependencies": {
+    "@electron/packager": "20.3.0",
+    "@playwright/test": "^1.56.1",
+    "@types/three": "^0.180.0",
+    "electron": "45.0.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.1.12",
+    "vitest": "^3.2.4"
+  },
+  "main": "electron/main.cjs"
+}

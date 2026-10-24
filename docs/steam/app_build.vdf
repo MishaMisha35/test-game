@@ -1,0 +1,13 @@
+"AppBuild"
+{
+  "AppID" "REPLACE_WITH_YOUR_APP_ID"
+  "Desc" "Eternal Realms private prototype validation"
+  "BuildOutput" "REPLACE_WITH_ABSOLUTE_BUILD_LOG_DIRECTORY"
+  "ContentRoot" "REPLACE_WITH_ABSOLUTE_RELEASE_DIRECTORY"
+  "Preview" "1"
+  "Depots"
+  {
+    "REPLACE_WITH_WINDOWS_DEPOT_ID" "depot_windows.vdf"
+    "REPLACE_WITH_LINUX_DEPOT_ID" "depot_linux.vdf"
+  }
+}

@@ -1,0 +1,12 @@
+"DepotBuildConfig"
+{
+  "DepotID" "REPLACE_WITH_LINUX_DEPOT_ID"
+  "ContentRoot" "REPLACE_WITH_ABSOLUTE_PATH_TO_Eternal_Realms-linux-x64"
+  "FileMapping"
+  {
+    "LocalPath" "*"
+    "DepotPath" "."
+    "recursive" "1"
+  }
+  "FileExclusion" "START-HERE.txt"
+}

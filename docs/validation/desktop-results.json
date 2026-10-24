@@ -1,0 +1,27 @@
+{
+  "target": "development Electron",
+  "rendering": "SwiftShader; Performance preset after full-quality menu capture; not a hardware benchmark",
+  "menu": {
+    "phase": "menu",
+    "canvas": {
+      "width": 1440,
+      "height": 876
+    },
+    "objects": 190
+  },
+  "movement": {
+    "before": {
+      "x": -0.000013940031749370974,
+      "y": 0.5426718950271606,
+      "z": 17
+    },
+    "after": {
+      "x": -0.012006412260234356,
+      "y": 0.5411889314651489,
+      "z": 16.372699737548828
+    }
+  },
+  "fullscreen": true,
+  "saved": true,
+  "rendererErrors": []
+}

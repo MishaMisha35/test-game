@@ -1,0 +1,64 @@
+name: Downloadable desktop game
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Check combat, saves, and Rapier physics
+        run: npm test
+      - name: Build Windows and Linux distributions
+        run: npm run package:desktop
+      - name: Package complete source and checksums
+        run: node scripts/package-source.mjs
+      - name: Verify archive checksums
+        working-directory: release
+        run: sha256sum -c SHA256SUMS.txt
+      - name: Download files from the Actions run
+        uses: actions/upload-artifact@v4
+        with:
+          name: Eternal-Realms-${{ github.run_number }}
+          path: |
+            release/*.zip
+            release/*.tar.gz
+            release/SHA256SUMS.txt
+          compression-level: 0
+          retention-days: 30
+          if-no-files-found: error
+      - name: Create a draft release with downloadable assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="build-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          gh release create "$tag" \
+            --target "$GITHUB_SHA" \
+            --title "Eternal Realms — build ${GITHUB_RUN_NUMBER}" \
+            --notes-file docs/RELEASE_NOTES.md \
+            --draft \
+            release/*.zip release/*.tar.gz release/SHA256SUMS.txt
