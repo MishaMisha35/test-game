@@ -1,16 +1,20 @@
-# Eternal Realms — playable desktop prologue
+# Eternal Realms 0.2.0 — Ultra Smooth
 
-Windows: download the Windows ZIP, extract the entire folder, and run `Eternal Realms.exe`.
-Linux: download the Linux tar.gz, extract the entire folder, and run `./"Eternal Realms"`.
-No browser, development server, or Node.js installation is required for play.
-The Source ZIP contains the complete project and build instructions.
+Настольный 3D fantasy RPG-пролог для Windows и Linux. Windows: распакуйте весь Windows ZIP и запустите `Eternal Realms.exe`. Linux: распакуйте tar.gz и выполните `./"Eternal Realms"`. Для игры не нужны Node.js, отдельный браузер, сервер или интернет. Архив Source содержит проект и инструкции сборки.
 
-Implemented: a procedural 3D valley, movement and collisions, sword combat, three
-spells, four wraiths, a two-phase Guardian, a quest, progression and local saves.
-This is the playable first development stage. See README.md for controls and
-limitations, and docs/STEAM.md for SteamPipe preparation.
+В этой версии:
 
-The original Linux package was execution-tested in the cloud. Windows was
-cross-packaged and requires testing on Windows. This automated CI build runs unit
-and physics tests; it does not claim a fresh native Windows/Linux gameplay test.
-No Steam upload has been performed. Steamworks services are not connected.
+- Интерполяция между физическими шагами, плавное ускорение/торможение, режим ходьбы CapsLock, буфер прыжка и coyote time.
+- Камера с безопасными сферическими проверками стен/углов, колесом масштабирования, сменой плеча B и первым лицом V.
+- Три лёгких удара в последовательности, очередь следующего удара, парирование в начале блока, уклонение с ограниченной фазой неуязвимости, след клинка и эффекты попаданий.
+- День/ночь с солнцем, луной и звёздами; мягкие контактные тени, вода, растительность и Bloom на High/Ultra.
+- Четыре пресета Low/Medium/High/Ultra, FOV, интенсивность камеры, необязательный Motion blur (по умолчанию выключен) и ограниченная адаптация разрешения.
+- Настройки сохраняются отдельно; игровой формат v1 совместим с предыдущим прологом.
+
+Существующий мир, NPC, квест, сундуки, четыре тени и двухфазный Хранитель сохранены. Полный перечень управления и изменений — в README.md и docs/ULTRA-SMOOTH.md.
+
+Для 0.2.0 выполнены сборка/TypeScript и 58 модульных проверок. Четыре выбранных игровых сценария и нативные проверки Linux прошли; исторический отчёт 0.1.0 сохранён отдельно. Аппаратный FPS-бенчмарк и запуск на настоящей Windows ещё требуются. Пресеты и адаптация разрешения не обещают фиксированные 60 FPS.
+
+Это игровой пролог. Steamworks-функции и загрузка в Steam не подключены; черновик GitHub Release автоматически не становится публичным релизом.
+
+Подробный отчёт обновления: [VALIDATION-0.2.md](https://github.com/MishaMisha35/test-game/blob/main/docs/VALIDATION-0.2.md).

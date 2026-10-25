@@ -1,4 +1,13 @@
 import * as THREE from "three";
+import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
+type WorldQuality = "low" | "medium" | "high" | "ultra";
+type VegetationCell = {
+  mesh: THREE.InstancedMesh;
+  center: THREE.Vector3;
+  kind: string;
+  count: number;
+  tier: number;
+};
 import type { Interactable, WorldObstacle } from "./types";
 import { ENEMY_SPAWNS, BOSS_SPAWN, SPAWN } from "./types";
 
@@ -32,6 +41,33 @@ export class WorldManager {
   readonly obstacles: WorldObstacle[] = [];
   readonly interactables: Interactable[] = [];
   private scene: THREE.Scene;
+  private quality: WorldQuality = "high";
+  private cells: VegetationCell[] = [];
+  private vegetation: Array<{ mesh: THREE.InstancedMesh; kind: string }> = [];
+  private staticCandidates: THREE.Mesh[] = [];
+  private beams: THREE.Group = new THREE.Group();
+  private fallingLeaves?: THREE.InstancedMesh;
+  private leafOrigins = new Float32Array(36 * 3);
+  private lights: THREE.PointLight[] = [];
+  private detailParticles?: THREE.Points;
+  private particleOrigins?: Float32Array;
+  private lodClock = 0;
+  private lastLodPosition = new THREE.Vector3(Infinity, Infinity, Infinity);
+  private readonly windowGlass = new THREE.MeshStandardMaterial({
+    color: "#f3d6a0",
+    emissive: "#ffa947",
+    emissiveIntensity: 1.2,
+    roughness: 0.28,
+  });
+  private readonly plaster = new THREE.MeshStandardMaterial({
+    color: "#b2a48b",
+    roughness: 1,
+  });
+  private readonly roofMaterial = new THREE.MeshStandardMaterial({
+    color: "#655751",
+    roughness: 1,
+    flatShading: true,
+  });
   private random = rng(73041);
   private trees?: THREE.InstancedMesh;
   private grasses?: THREE.InstancedMesh;
@@ -121,6 +157,12 @@ export class WorldManager {
       }),
     );
     scene.add(this.motes);
+    this.createForestDetails();
+    this.createContactShadows();
+    for (const entry of this.vegetation)
+      this.splitVegetation(entry.mesh, entry.kind);
+    this.mergeStaticStructures();
+    this.setQuality("high");
   }
 
   private windMaterial(amplitude: number, doubleSided = false) {
@@ -163,6 +205,7 @@ export class WorldManager {
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     parent.add(mesh);
+    this.staticCandidates.push(mesh);
     return mesh;
   }
   private box(
@@ -325,13 +368,13 @@ export class WorldManager {
     const pine = positions.filter((p) => p.pine),
       broad = positions.filter((p) => !p.pine);
     const foliage = new THREE.InstancedMesh(
-      new THREE.ConeGeometry(1, 1, 7),
+      new THREE.ConeGeometry(1, 1, 11),
       this.windMaterial(0.035),
       pine.length * 3,
     );
     this.trees = foliage;
     const broadLeaves = new THREE.InstancedMesh(
-      new THREE.IcosahedronGeometry(1, 1),
+      new THREE.IcosahedronGeometry(1, 2),
       this.windMaterial(0.045),
       broad.length * 4,
     );
@@ -401,6 +444,10 @@ export class WorldManager {
       m.castShadow = true;
       m.receiveShadow = true;
       this.scene.add(m);
+      this.vegetation.push({
+        mesh: m,
+        kind: m === trunks ? "trunk" : m === foliage ? "pine" : "broad",
+      });
     });
   }
   private createGrass() {
@@ -447,6 +494,7 @@ export class WorldManager {
     grass.receiveShadow = true;
     this.grasses = grass;
     this.scene.add(grass);
+    this.vegetation.push({ mesh: grass, kind: "grass" });
     const flowers = new THREE.InstancedMesh(
       new THREE.IcosahedronGeometry(0.09, 0),
       new THREE.MeshStandardMaterial({
@@ -466,6 +514,7 @@ export class WorldManager {
     }
     this.flowers = flowers;
     this.scene.add(flowers);
+    this.vegetation.push({ mesh: flowers, kind: "flower" });
   }
   private createRocks() {
     const rocks = new THREE.InstancedMesh(
@@ -507,6 +556,7 @@ export class WorldManager {
     rocks.castShadow = true;
     rocks.receiveShadow = true;
     this.scene.add(rocks);
+    this.vegetation.push({ mesh: rocks, kind: "rock" });
   }
   private house(
     x: number,
@@ -519,15 +569,8 @@ export class WorldManager {
     group.position.set(x, terrainHeight(x, z), z);
     group.rotation.y = yaw;
     this.scene.add(group);
-    const plaster = new THREE.MeshStandardMaterial({
-      color: "#b2a48b",
-      roughness: 1,
-    });
-    const roofMat = new THREE.MeshStandardMaterial({
-      color: "#655751",
-      roughness: 1,
-      flatShading: true,
-    });
+    const plaster = this.plaster,
+      roofMat = this.roofMaterial;
     this.box(width, 3.8, depth, 0, 1.9, 0, plaster, group);
     this.box(width + 0.3, 0.35, depth + 0.3, 0, 0.2, 0, this.darkStone, group);
     for (const px of [-width / 2, width / 2])
@@ -549,11 +592,7 @@ export class WorldManager {
         px,
         2.1,
         depth / 2 + 0.13,
-        new THREE.MeshStandardMaterial({
-          color: "#e9bf79",
-          emissive: "#d28a35",
-          emissiveIntensity: 0.7,
-        }),
+        this.windowGlass,
         group,
       );
       this.box(0.07, 0.76, 0.2, px, 2.1, depth / 2 + 0.15, this.wood, group);
@@ -582,6 +621,7 @@ export class WorldManager {
     const light = new THREE.PointLight("#ffc06e", 1.3, 7, 2);
     light.position.set(x + 0.53, y + 2.4, z);
     this.scene.add(light);
+    this.lights.push(light);
   }
   private createVillage() {
     this.house(17, 22, 6, 5, -0.55);
@@ -682,8 +722,10 @@ export class WorldManager {
     const fire = new THREE.PointLight("#ffaf5f", 3.5, 9, 2);
     fire.position.set(-6, terrainHeight(-6, 11) + 1, 11);
     this.scene.add(fire);
+    this.lights.push(fire);
     // Quest giver: a cloaked traveller with a luminous staff.
     const npc = new THREE.Group();
+    npc.userData.dynamicWorld = true;
     npc.position.set(5, terrainHeight(5, 15), 15);
     npc.rotation.y = -0.6;
     this.scene.add(npc);
@@ -958,6 +1000,7 @@ export class WorldManager {
     ];
     for (const p of locations) {
       const root = new THREE.Group();
+      root.userData.dynamicWorld = true;
       root.position.set(p.x, terrainHeight(p.x, p.z), p.z);
       root.rotation.y = -0.35;
       this.scene.add(root);
@@ -1020,6 +1063,7 @@ export class WorldManager {
       );
     }
     this.scene.add(reeds);
+    this.vegetation.push({ mesh: reeds, kind: "detail" });
     return water;
   }
   private createShrine() {
@@ -1041,6 +1085,7 @@ export class WorldManager {
       z,
     );
     const group = new THREE.Group();
+    group.userData.dynamicWorld = true;
     group.position.set(x, y + 2.4, z);
     this.scene.add(group);
     const crystal = this.mesh(
@@ -1061,6 +1106,7 @@ export class WorldManager {
     const light = new THREE.PointLight("#6de8cf", 3, 12, 2);
     light.position.set(x, y + 3, z);
     this.scene.add(light);
+    this.lights.push(light);
     this.interactables.push({
       id: "ancient-shrine",
       type: "shrine",
@@ -1073,6 +1119,7 @@ export class WorldManager {
   }
   private createClouds() {
     const root = new THREE.Group();
+    root.userData.dynamicWorld = true;
     this.scene.add(root);
     const geo = new THREE.IcosahedronGeometry(1, 1),
       mat = new THREE.MeshStandardMaterial({
@@ -1096,6 +1143,441 @@ export class WorldManager {
     }
     return root;
   }
+  /** Split immutable instance matrices into bounded cells so Three can cull them. */
+  private splitVegetation(source: THREE.InstancedMesh, kind: string) {
+    const buckets = new Map<string, number[]>(),
+      matrix = new THREE.Matrix4(),
+      position = new THREE.Vector3();
+    const cellSize =
+      kind === "grass" || kind === "detail" || kind === "flower" ? 48 : 64;
+    for (let i = 0; i < source.count; i++) {
+      source.getMatrixAt(i, matrix);
+      position.setFromMatrixPosition(matrix);
+      const tier = kind === "pine" ? i % 3 : 0;
+      const key = `${Math.floor(position.x / cellSize)},${Math.floor(position.z / cellSize)},${tier}`;
+      const list = buckets.get(key) || [];
+      list.push(i);
+      buckets.set(key, list);
+    }
+    const color = new THREE.Color();
+    for (const [key, indices] of buckets) {
+      const cell = new THREE.InstancedMesh(
+        source.geometry,
+        source.material,
+        indices.length,
+      );
+      cell.name = `world-${kind}-${key}`;
+      cell.receiveShadow = source.receiveShadow;
+      cell.castShadow = source.castShadow;
+      indices.forEach((index, i) => {
+        source.getMatrixAt(index, matrix);
+        cell.setMatrixAt(i, matrix);
+        if (source.instanceColor) {
+          source.getColorAt(index, color);
+          cell.setColorAt(i, color);
+        }
+      });
+      cell.computeBoundingBox();
+      cell.computeBoundingSphere();
+      const center = cell.boundingSphere?.center.clone() || new THREE.Vector3();
+      this.cells.push({
+        mesh: cell,
+        center,
+        kind,
+        count: indices.length,
+        tier: Number(key.split(",")[2]),
+      });
+      this.scene.add(cell);
+    }
+    source.removeFromParent();
+    source.dispose();
+  }
+  private updateVegetationLOD(camera: THREE.Vector3) {
+    const q = this.quality,
+      detailRange =
+        q === "ultra" ? 70 : q === "high" ? 56 : q === "medium" ? 38 : 0;
+    for (const cell of this.cells) {
+      const distance = Math.hypot(
+        cell.center.x - camera.x,
+        cell.center.z - camera.z,
+      );
+      const isDetail = ["grass", "detail", "flower", "shrub"].includes(
+        cell.kind,
+      );
+      let visible =
+        !isDetail || (detailRange > 0 && distance < detailRange + 26);
+      if (cell.kind === "pine" && distance > 95 && cell.tier !== 2)
+        visible = false;
+      if (cell.kind === "pine" && distance > 73 && cell.tier === 1)
+        visible = false;
+      if (!isDetail && distance > 155) visible = false;
+      cell.mesh.visible = visible;
+      cell.mesh.count = isDetail
+        ? Math.max(
+            0,
+            Math.floor(
+              cell.count *
+                (q === "ultra"
+                  ? 1
+                  : q === "high"
+                    ? distance > 40
+                      ? 0.6
+                      : 1
+                    : q === "medium"
+                      ? 0.45
+                      : 0),
+            ),
+          )
+        : cell.count;
+      cell.mesh.castShadow =
+        !isDetail &&
+        q !== "low" &&
+        distance < (q === "ultra" ? 65 : q === "high" ? 48 : 30);
+    }
+  }
+  /** Bake only static structure pieces; animated chest lids, NPC and clouds stay separate. */
+  private mergeStaticStructures() {
+    this.scene.updateMatrixWorld(true);
+    const groups = new Map<string, THREE.Mesh[]>();
+    for (const mesh of this.staticCandidates) {
+      let parent: THREE.Object3D | null = mesh;
+      let dynamic = false;
+      while (parent) {
+        if (parent.userData.dynamicWorld) {
+          dynamic = true;
+          break;
+        }
+        parent = parent.parent;
+      }
+      if (dynamic || Array.isArray(mesh.material)) continue;
+      const p = new THREE.Vector3().setFromMatrixPosition(mesh.matrixWorld);
+      const key = `${mesh.material.uuid}:${Math.floor(p.x / 45)},${Math.floor(p.z / 45)}:${mesh.castShadow}:${mesh.receiveShadow}`;
+      const list = groups.get(key) || [];
+      list.push(mesh);
+      groups.set(key, list);
+    }
+    for (const meshes of groups.values()) {
+      if (meshes.length < 2) continue;
+      const geometries = meshes.map((mesh) => {
+        const g = mesh.geometry.index
+          ? mesh.geometry.toNonIndexed()
+          : mesh.geometry.clone();
+        g.applyMatrix4(mesh.matrixWorld);
+        return g;
+      });
+      const geometry = mergeGeometries(geometries, false);
+      geometries.forEach((g) => g.dispose());
+      if (!geometry) continue;
+      const batch = new THREE.Mesh(geometry, meshes[0].material);
+      batch.name = "world-static-batch";
+      batch.castShadow = meshes[0].castShadow;
+      batch.receiveShadow = meshes[0].receiveShadow;
+      geometry.computeBoundingBox();
+      geometry.computeBoundingSphere();
+      batch.matrixAutoUpdate = false;
+      this.scene.add(batch);
+      meshes.forEach((mesh) => mesh.removeFromParent());
+    }
+    this.staticCandidates = [];
+  }
+  private createContactShadows() {
+    const size = 64,
+      data = new Uint8Array(size * size * 4);
+    for (let y = 0; y < size; y++)
+      for (let x = 0; x < size; x++) {
+        const d = Math.hypot(
+          (x - size / 2) / (size / 2),
+          (y - size / 2) / (size / 2),
+        );
+        const i = (y * size + x) * 4;
+        data[i] = 9;
+        data[i + 1] = 18;
+        data[i + 2] = 14;
+        data[i + 3] = Math.round(Math.max(0, 1 - d) ** 2 * 125);
+      }
+    const texture = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+    texture.needsUpdate = true;
+    const mat = new THREE.MeshBasicMaterial({
+      map: texture,
+      transparent: true,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+    });
+    const geo = new THREE.PlaneGeometry(1, 1);
+    geo.rotateX(-Math.PI / 2);
+    const shadows = new THREE.InstancedMesh(geo, mat, this.obstacles.length);
+    this.obstacles.forEach((o, i) => {
+      const diameter = Math.max(o.hx, o.hz) * 4.3;
+      this.instance(
+        shadows,
+        i,
+        o.x,
+        terrainHeight(o.x, o.z) + 0.045,
+        o.z,
+        diameter,
+        1,
+        diameter,
+        o.rotation || 0,
+      );
+    });
+    shadows.renderOrder = 1;
+    shadows.computeBoundingSphere();
+    this.scene.add(shadows);
+  }
+  private createForestDetails() {
+    // Separate seed: adding dressing never changes terrain, collision or quest positions.
+    const random = rng(20819),
+      positions: Array<{ x: number; z: number; s: number }> = [];
+    for (let n = 0; n < 1800 && positions.length < 300; n++) {
+      const x = (random() - 0.5) * 89,
+        z = random() * 118 - 77;
+      if (
+        Math.abs(x - pathX(z)) < 3.2 ||
+        Math.hypot(x, z + 58) < 14 ||
+        (x < -25 && x > -44 && z > -35 && z < 24)
+      )
+        continue;
+      positions.push({ x, z, s: 0.45 + random() * 0.8 });
+    }
+    // Fern fronds use a single two-sided mesh per cell, not individual leaf objects.
+    const vertices: number[] = [];
+    for (let arm = 0; arm < 7; arm++) {
+      const a = (arm / 7) * TAU;
+      for (let leaf = 1; leaf < 5; leaf++)
+        for (const side of [-1, 1]) {
+          const t = leaf / 5,
+            length = 0.65 * (1 - t) * side,
+            rx = Math.cos(a),
+            rz = Math.sin(a);
+          const bx = rx * t * 0.8,
+            bz = rz * t * 0.8,
+            by = Math.sin(t * Math.PI) * 0.45;
+          vertices.push(
+            bx,
+            by,
+            bz,
+            bx + rx * 0.15 - rz * length,
+            by + 0.08,
+            bz + rz * 0.15 + rx * length,
+            bx + rx * 0.24,
+            by + 0.03,
+            bz + rz * 0.24,
+          );
+        }
+    }
+    const fernGeo = new THREE.BufferGeometry();
+    fernGeo.setAttribute(
+      "position",
+      new THREE.Float32BufferAttribute(vertices, 3),
+    );
+    fernGeo.computeVertexNormals();
+    const ferns = new THREE.InstancedMesh(
+      fernGeo,
+      this.windMaterial(0.08, true),
+      positions.length,
+    );
+    const shrubs = new THREE.InstancedMesh(
+      new THREE.IcosahedronGeometry(1, 1),
+      this.windMaterial(0.06),
+      120,
+    );
+    const caps = new THREE.InstancedMesh(
+      new THREE.SphereGeometry(0.17, 7, 4, 0, TAU, 0, Math.PI * 0.55),
+      new THREE.MeshStandardMaterial({ color: "#ba7e55", roughness: 0.9 }),
+      110,
+    );
+    const stems = new THREE.InstancedMesh(
+      new THREE.CylinderGeometry(0.035, 0.05, 0.22, 5),
+      new THREE.MeshStandardMaterial({ color: "#d2c3a0", roughness: 1 }),
+      110,
+    );
+    const blossoms = new THREE.InstancedMesh(
+      new THREE.OctahedronGeometry(0.12, 0),
+      new THREE.MeshStandardMaterial({
+        color: "#b6d4e3",
+        emissive: "#639db8",
+        emissiveIntensity: 0.75,
+        roughness: 0.55,
+      }),
+      75,
+    );
+    const color = new THREE.Color();
+    positions.forEach((p, i) => {
+      const y = terrainHeight(p.x, p.z);
+      this.instance(
+        ferns,
+        i,
+        p.x,
+        y + 0.02,
+        p.z,
+        p.s,
+        p.s,
+        p.s,
+        random() * TAU,
+      );
+      color.setHSL(0.27 + random() * 0.08, 0.32, 0.23 + random() * 0.13);
+      ferns.setColorAt(i, color);
+      if (i < 120) {
+        this.instance(
+          shrubs,
+          i,
+          p.x + 0.45,
+          y + 0.25 * p.s,
+          p.z - 0.3,
+          p.s * 0.65,
+          p.s * 0.4,
+          p.s * 0.6,
+          random() * TAU,
+        );
+        shrubs.setColorAt(i, color);
+      }
+      if (i < 110) {
+        this.instance(stems, i, p.x + 0.7, y + 0.11, p.z, 1, 1, 1);
+        this.instance(caps, i, p.x + 0.7, y + 0.22, p.z, 1, 1, 1);
+      }
+      if (i < 75)
+        this.instance(
+          blossoms,
+          i,
+          p.x - 0.3,
+          y + 0.55,
+          p.z,
+          0.8,
+          1.4,
+          0.8,
+          random() * TAU,
+        );
+    });
+    [ferns, shrubs, caps, stems, blossoms].forEach((mesh) => {
+      mesh.receiveShadow = true;
+      this.scene.add(mesh);
+      this.vegetation.push({ mesh, kind: "detail" });
+    });
+    const leafShape = new THREE.Shape();
+    leafShape.moveTo(0, -0.17);
+    leafShape.quadraticCurveTo(0.13, -0.02, 0, 0.17);
+    leafShape.quadraticCurveTo(-0.13, 0.02, 0, -0.17);
+    this.fallingLeaves = new THREE.InstancedMesh(
+      new THREE.ShapeGeometry(leafShape, 3),
+      new THREE.MeshStandardMaterial({
+        color: "#bda06b",
+        roughness: 1,
+        side: THREE.DoubleSide,
+      }),
+      36,
+    );
+    this.fallingLeaves.name = "drifting-autumn-leaves";
+    this.fallingLeaves.frustumCulled = false;
+    for (let n = 0; n < 36; n++) {
+      const p = positions[n * 3];
+      this.leafOrigins.set([p.x, terrainHeight(p.x, p.z), p.z], n * 3);
+    }
+    this.scene.add(this.fallingLeaves);
+    // Shallow visual outflow lies beside the western lake, away from the road.
+    const riverVerts: number[] = [],
+      indices: number[] = [];
+    for (let i = 0; i <= 32; i++) {
+      const z = 15 + i * 0.9,
+        x = -34 + Math.sin(i * 0.12) * 3,
+        width = 1.1 + Math.sin(i * 0.2) * 0.2;
+      for (const side of [-1, 1]) {
+        const px = x + width * side;
+        riverVerts.push(px, terrainHeight(px, z) + 0.035, z);
+      }
+      if (i < 32) {
+        const j = i * 2;
+        indices.push(j, j + 2, j + 1, j + 1, j + 2, j + 3);
+      }
+    }
+    const riverGeo = new THREE.BufferGeometry();
+    riverGeo.setAttribute(
+      "position",
+      new THREE.Float32BufferAttribute(riverVerts, 3),
+    );
+    riverGeo.setIndex(indices);
+    riverGeo.computeVertexNormals();
+    const river = new THREE.Mesh(
+      riverGeo,
+      new THREE.MeshStandardMaterial({
+        color: "#679c99",
+        metalness: 0.5,
+        roughness: 0.2,
+        transparent: true,
+        opacity: 0.72,
+      }),
+    );
+    river.receiveShadow = true;
+    this.scene.add(river);
+    // Restrained shafts: soft alpha gradients with no volumetric raymarch pass.
+    const size = 64,
+      data = new Uint8Array(size * size * 4);
+    for (let y = 0; y < size; y++)
+      for (let x = 0; x < size; x++) {
+        const i = (y * size + x) * 4,
+          edge = Math.sin((x / size) * Math.PI);
+        data[i] = 255;
+        data[i + 1] = 226;
+        data[i + 2] = 163;
+        data[i + 3] = Math.round(edge * edge * (1 - y / size) * 100);
+      }
+    const tex = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+    tex.needsUpdate = true;
+    const shaftMat = new THREE.MeshBasicMaterial({
+      map: tex,
+      color: "#ffe7aa",
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.055,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    for (const [x, z] of [
+      [-9, -9],
+      [14, -25],
+      [-18, -39],
+      [17, 4],
+    ]) {
+      const beam = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 17), shaftMat);
+      beam.position.set(x, terrainHeight(x, z) + 7.6, z);
+      beam.rotation.z = -0.33;
+      beam.rotation.y = 0.45;
+      this.beams.add(beam);
+    }
+    this.scene.add(this.beams);
+    const particlePositions = new Float32Array(96 * 3),
+      colors = new Float32Array(96 * 3);
+    for (let i = 0; i < 96; i++) {
+      const x = (random() - 0.5) * 75,
+        z = random() * 107 - 68;
+      particlePositions.set(
+        [x, terrainHeight(x, z) + 0.6 + random() * 4, z],
+        i * 3,
+      );
+      color.set(i % 4 === 0 ? "#d8b577" : i % 3 === 0 ? "#8ed5ba" : "#e5d3a2");
+      color.toArray(colors, i * 3);
+    }
+    this.particleOrigins = particlePositions.slice();
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute(
+      "position",
+      new THREE.BufferAttribute(particlePositions, 3),
+    );
+    geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+    this.detailParticles = new THREE.Points(
+      geo,
+      new THREE.PointsMaterial({
+        size: 0.08,
+        vertexColors: true,
+        transparent: true,
+        opacity: 0.62,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+      }),
+    );
+    this.scene.add(this.detailParticles);
+  }
+
   resetInteractables() {
     for (const item of this.interactables) item.used = false;
     for (const lid of this.chestLids.values()) lid.rotation.x = 0;
@@ -1106,12 +1588,84 @@ export class WorldManager {
     const lid = this.chestLids.get(id);
     if (lid) lid.rotation.x = -Math.PI * 0.68;
   }
-  setQuality(high: boolean) {
-    if (this.grasses) this.grasses.visible = high;
-    if (this.flowers) this.flowers.visible = high;
-    this.motes.visible = high;
+  setQuality(value: boolean | WorldQuality) {
+    this.quality =
+      typeof value === "boolean" ? (value ? "high" : "low") : value;
+    this.motes.visible = this.quality !== "low";
+    if (this.detailParticles)
+      this.detailParticles.visible =
+        this.quality === "high" || this.quality === "ultra";
+    this.beams.visible = this.quality === "high" || this.quality === "ultra";
+    if (this.fallingLeaves) {
+      this.fallingLeaves.visible = this.quality !== "low";
+      this.fallingLeaves.count = this.quality === "medium" ? 18 : 36;
+    }
+    this.lodClock = 1;
+    this.updateVegetationLOD(
+      this.lastLodPosition.x === Infinity
+        ? new THREE.Vector3(0, 4, 17)
+        : this.lastLodPosition,
+    );
   }
-  update(_dt: number, time: number) {
+  update(dt: number, time: number, camera?: THREE.Camera) {
+    this.lodClock += dt;
+    if (
+      camera &&
+      (this.lodClock > 0.2 ||
+        camera.position.distanceToSquared(this.lastLodPosition) > 36)
+    ) {
+      this.lodClock = 0;
+      this.lastLodPosition.copy(camera.position);
+      this.updateVegetationLOD(camera.position);
+    }
+    const daylight = Math.max(
+      0,
+      Math.sin(((17.4 + time / 50 - 6) / 24) * Math.PI * 2),
+    );
+    this.beams.visible =
+      (this.quality === "high" || this.quality === "ultra") && daylight > 0.08;
+    for (const child of this.beams.children) {
+      const mat = (child as THREE.Mesh).material as THREE.MeshBasicMaterial;
+      mat.opacity = 0.055 * daylight;
+    }
+    for (let i = 0; i < this.lights.length; i++)
+      this.lights[i].intensity =
+        (i === 4 ? 3.5 : i === 5 ? 3 : 1.3) *
+        (1 + Math.sin(time * 7 + i) * 0.045);
+    if (this.detailParticles && this.particleOrigins) {
+      const p = this.detailParticles.geometry.getAttribute(
+        "position",
+      ) as THREE.BufferAttribute;
+      for (let i = 0; i < p.count; i++)
+        p.setXYZ(
+          i,
+          this.particleOrigins[i * 3] + Math.sin(time * 0.3 + i) * 0.9,
+          this.particleOrigins[i * 3 + 1] +
+            Math.sin(time * 0.45 + i * 0.7) * 0.4,
+          this.particleOrigins[i * 3 + 2] + Math.cos(time * 0.2 + i) * 0.8,
+        );
+      p.needsUpdate = true;
+    }
+    if (this.fallingLeaves && this.fallingLeaves.visible) {
+      for (let n = 0; n < this.fallingLeaves.count; n++) {
+        const x = this.leafOrigins[n * 3],
+          z = this.leafOrigins[n * 3 + 2];
+        this.dummy.position.set(
+          x + Math.sin(time * 0.6 + n) * 0.45,
+          this.leafOrigins[n * 3 + 1] + 5 - ((time * 0.35 + n * 0.21) % 5),
+          z + Math.cos(time * 0.4 + n) * 0.35,
+        );
+        this.dummy.rotation.set(
+          time * 0.7 + n,
+          time * 0.4 + n * 0.3,
+          Math.sin(time * 0.8 + n) * 0.7,
+        );
+        this.dummy.scale.setScalar(0.75 + (n % 4) * 0.15);
+        this.dummy.updateMatrix();
+        this.fallingLeaves.setMatrixAt(n, this.dummy.matrix);
+      }
+      this.fallingLeaves.instanceMatrix.needsUpdate = true;
+    }
     for (const uniform of this.windTimes) uniform.value = time;
     this.rune.rotation.y = time * 0.35;
     this.rune.position.y =

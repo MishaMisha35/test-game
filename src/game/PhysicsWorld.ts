@@ -119,23 +119,36 @@ export class PhysicsWorld {
     this.world.removeCharacterController(actor.controller);
     this.world.removeRigidBody(actor.body);
   }
+  /** Sweeps the near-plane's enclosing sphere through static geometry. */
   cameraDistance(
     start: { x: number; y: number; z: number },
     dir: { x: number; y: number; z: number },
     distance: number,
+    radius = 0.28,
   ) {
-    const hit = this.world.castRay(
-      new RAPIER.Ray(start, dir),
+    if (!Number.isFinite(distance) || distance <= 0) return 0;
+    const magnitude = Math.hypot(dir.x, dir.y, dir.z);
+    if (magnitude < 0.000001) return 0;
+    const hit = this.world.castShape(
+      start,
+      { x: 0, y: 0, z: 0, w: 1 },
+      { x: dir.x / magnitude, y: dir.y / magnitude, z: dir.z / magnitude },
+      new RAPIER.Ball(Math.max(0.01, radius)),
+      0.025,
       distance,
       true,
       undefined,
       undefined,
       undefined,
       undefined,
-      (c) => !c.parent(),
+      this.staticCollisionFilter,
     );
-    return hit ? Math.max(0.15, hit.timeOfImpact - 0.3) : distance;
+    return hit ? Math.max(0, hit.time_of_impact - 0.02) : distance;
   }
+  private readonly staticCollisionFilter = (collider: RAPIER.Collider) => {
+    const body = collider.parent();
+    return !collider.isSensor() && (!body || body.isFixed());
+  };
   lineClear(
     start: { x: number; y: number; z: number },
     end: { x: number; y: number; z: number },

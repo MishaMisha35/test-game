@@ -6,18 +6,24 @@ import type { PhysicsWorld } from "./PhysicsWorld";
 import type { Effects } from "./Effects";
 interface Projectile {
   mesh: THREE.Group;
+  position: THREE.Vector3;
+  previous: THREE.Vector3;
   velocity: THREE.Vector3;
   life: number;
   frost: boolean;
+  trailTime: number;
 }
 export class MagicSystem {
   projectiles: Projectile[] = [];
   frost = false;
+  private light = new THREE.PointLight(0xffb256, 0, 5);
   constructor(
     private scene: THREE.Scene,
     private physics: PhysicsWorld,
     private effects: Effects,
-  ) {}
+  ) {
+    scene.add(this.light);
+  }
   cast(player: PlayerController, enemies: EnemyAI) {
     if (player.mana < 22 || player.spellCooldown > 0 || !player.alive)
       return false;
@@ -71,14 +77,17 @@ export class MagicSystem {
         }),
       ),
     );
-    group.add(new THREE.PointLight(color, 3, 5));
+    // A persistent light avoids recompiling every world material when a bolt spawns.
     group.position.copy(origin).addScaledVector(direction, 0.7);
     this.scene.add(group);
     this.projectiles.push({
       mesh: group,
+      position: group.position.clone(),
+      previous: group.position.clone(),
       velocity: direction.multiplyScalar(22),
       life: 2.3,
       frost: this.frost,
+      trailTime: 0,
     });
     return true;
   }
@@ -88,9 +97,15 @@ export class MagicSystem {
     player: PlayerController,
     onHit: (enemy: Enemy, damage: number) => void,
   ) {
+    this.light.intensity = this.projectiles.length ? 2 : 0;
+    if (this.projectiles.length) {
+      this.light.position.copy(this.projectiles[0].mesh.position);
+      this.light.color.setHex(this.projectiles[0].frost ? 0x91dcf3 : 0xffb256);
+    }
     this.projectiles = this.projectiles.filter((p) => {
       p.life -= dt;
-      const from = p.mesh.position.clone(),
+      p.previous.copy(p.position);
+      const from = p.position.clone(),
         to = from.clone().addScaledVector(p.velocity, dt);
       let hit: Enemy | undefined;
       if (p.life > 0)
@@ -123,10 +138,26 @@ export class MagicSystem {
         });
         return false;
       }
-      p.mesh.position.copy(to);
+      p.trailTime += dt;
+      if (p.trailTime >= 0.045) {
+        p.trailTime = 0;
+        this.effects.trail(to, p.frost ? 0x91dcf3 : 0xffb256);
+      }
+      p.position.copy(to);
       p.mesh.rotation.z += dt * 4;
       return true;
     });
+  }
+  freezeInterpolation() {
+    for (const p of this.projectiles) p.previous.copy(p.position);
+  }
+  render(alpha: number) {
+    for (const p of this.projectiles)
+      p.mesh.position.lerpVectors(
+        p.previous,
+        p.position,
+        Math.max(0, Math.min(1, alpha)),
+      );
   }
   clear() {
     for (const p of this.projectiles) {
@@ -139,5 +170,6 @@ export class MagicSystem {
       });
     }
     this.projectiles = [];
+    this.light.intensity = 0;
   }
 }

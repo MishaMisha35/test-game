@@ -10,7 +10,9 @@ export type SoundEffect =
   | "ui"
   | "victory"
   | "dodge"
-  | "chest";
+  | "chest"
+  | "parry"
+  | "land";
 
 export class AudioManager {
   enabled = true;
@@ -89,6 +91,15 @@ export class AudioManager {
     if (!this.enabled || !this.context || this.context.state !== "running")
       return;
     switch (type) {
+      case "parry":
+        this.tone(880, 510, 0.16, 0.085, "sine");
+        this.tone(1330, 990, 0.22, 0.035, "sine");
+        this.noise(0.09, 0.1, 2500, "highpass");
+        break;
+      case "land":
+        this.noise(0.17, 0.1, 420, "lowpass");
+        this.tone(65, 34, 0.14, 0.065, "sine");
+        break;
       case "swing":
         this.noise(0.19, 0.24, 1450, "bandpass");
         this.tone(190, 75, 0.15, 0.08, "triangle");

@@ -20,6 +20,10 @@ export interface Enemy {
   model: CharacterModel;
   actor: ActorBody | null;
   position: THREE.Vector3;
+  previousPosition: THREE.Vector3;
+  motion: number;
+  animation: number;
+  visualYaw: number;
   home: THREE.Vector3;
   health: number;
   maxHealth: number;
@@ -88,6 +92,10 @@ export class EnemyAI {
           boss ? 1.7 : 0.9,
         ),
         position,
+        previousPosition: position.clone(),
+        motion: 0,
+        animation: 0,
+        visualYaw: 0,
         home: position.clone(),
         health: boss ? 300 : 72,
         maxHealth: boss ? 300 : 72,
@@ -128,7 +136,8 @@ export class EnemyAI {
     for (const e of this.enemies) {
       e.timer -= dt;
       if (e.health <= 0) {
-        e.model.update(dt, 0, 0, false, true, time);
+        e.motion = 0;
+        e.animation = 0;
         continue;
       }
       const distance = e.position.distanceTo(player.position),
@@ -233,8 +242,10 @@ export class EnemyAI {
                   );
             if (hit && this.physics.lineClear(e.hitbox, player.hitbox))
               onHit(e.boss ? (e.phase === 2 ? 28 : 22) : 14, e);
-            e.state = "recover";
-            e.timer = e.boss ? 1.4 : 1.05;
+            if (e.state === "windup") {
+              e.state = "recover";
+              e.timer = e.boss ? 1.4 : 1.05;
+            }
             mat.opacity = 0;
             e.ring.visible = false;
           }
@@ -243,12 +254,35 @@ export class EnemyAI {
           e.state = "chase";
       }
       if (vx || vz) e.yaw = Math.atan2(-vx, -vz);
-      e.model.group.rotation.y = e.yaw;
+      e.motion = Math.hypot(vx, vz) / 4;
+      e.animation = animation;
       if (e.actor) this.physics.move(e.actor, vx * dt, -5 * dt, vz * dt);
-      e.model.update(dt, Math.hypot(vx, vz) / 4, animation, false, false, time);
+
       e.healthBar.visible = e.health < e.maxHealth && distance < 25 && !e.boss;
       e.healthBar.position
         .copy(e.position)
+        .add(new THREE.Vector3(0, e.boss ? 4 : 2.3, 0));
+    }
+  }
+  beginStep() {
+    for (const e of this.enemies) e.previousPosition.copy(e.position);
+  }
+  freezeInterpolation() {
+    for (const e of this.enemies) e.previousPosition.copy(e.position);
+  }
+  render(alpha: number, dt: number, time: number) {
+    for (const e of this.enemies) {
+      e.model.group.position.lerpVectors(e.previousPosition, e.position, alpha);
+      e.visualYaw +=
+        Math.atan2(
+          Math.sin(e.yaw - e.visualYaw),
+          Math.cos(e.yaw - e.visualYaw),
+        ) *
+        (1 - Math.exp(-dt * 18));
+      e.model.group.rotation.y = e.visualYaw;
+      e.model.update(dt, e.motion, e.animation, false, e.health <= 0, time);
+      e.healthBar.position
+        .copy(e.model.group.position)
         .add(new THREE.Vector3(0, e.boss ? 4 : 2.3, 0));
     }
   }
@@ -257,7 +291,7 @@ export class EnemyAI {
       if (e.actor) {
         const p = e.actor.body.translation();
         e.position.set(p.x, p.y - e.actor.halfHeight, p.z);
-        e.model.group.position.copy(e.position);
+
         e.hitbox = {
           x: e.position.x,
           y: e.position.y + (e.boss ? 1.5 : 1),
@@ -307,6 +341,9 @@ export class EnemyAI {
       e.ring.visible = false;
       e.healthBar.visible = false;
       e.position.copy(e.home);
+      e.previousPosition.copy(e.home);
+      e.motion = 0;
+      e.animation = 0;
       if (e.actor) this.physics.teleport(e.actor, e.home.x, e.home.y, e.home.z);
       else
         e.actor = this.physics.createActor(

@@ -10,6 +10,15 @@ import { Effects } from "./Effects";
 import { AudioManager } from "./AudioManager";
 import { SaveSystem, type SaveData } from "./SaveSystem";
 import { meleeHits, damageAfterBlock } from "./CombatSystem";
+import {
+  SettingsSystem,
+  AdaptiveResolution,
+  PRESETS,
+  QUALITY_LEVELS,
+  type QualityPreset,
+} from "./SettingsSystem";
+import { RenderPipeline } from "./RenderPipeline";
+import { AtmosphereSystem } from "./AtmosphereSystem";
 import { UIManager } from "../ui/UIManager";
 import {
   SPAWN,
@@ -44,7 +53,13 @@ export class GameManager {
   panel: Panel = "none";
   questAccepted = false;
   questComplete = false;
-  quality: "high" | "low" = "high";
+  quality: QualityPreset = "high";
+  readonly settings = new SettingsSystem();
+  private adaptive = new AdaptiveResolution();
+  readonly pipeline: RenderPipeline;
+  readonly atmosphere: AtmosphereSystem;
+  private hitStop = 0;
+  private dustTimer = 0;
   name = "The Wayfarer";
   message = "";
   interaction = "";
@@ -78,7 +93,7 @@ export class GameManager {
     document.body.prepend(this.renderer.domElement);
     this.scene.background = new THREE.Color("#aebfb3");
     this.scene.fog = new THREE.Fog("#aebfb3", 38, 145);
-    this.scene.add(new THREE.HemisphereLight("#d6e8de", "#4b5034", 2.0));
+
     this.sun = new THREE.DirectionalLight("#ffdda3", 3.5);
     this.sun.position.set(-32, 48, 25);
     this.sun.castShadow = true;
@@ -95,7 +110,7 @@ export class GameManager {
     this.sun.shadow.normalBias = 0.035;
     this.sun.shadow.radius = 3;
     this.scene.add(this.sun, this.sun.target);
-    this.addSky();
+    this.atmosphere = new AtmosphereSystem(this.scene, this.sun);
     this.world = new WorldManager(this.scene);
     this.physics = new PhysicsWorld(this.world.obstacles);
     this.effects = new Effects(this.scene);
@@ -105,6 +120,8 @@ export class GameManager {
     this.enemies = new EnemyAI(this.physics, this.scene, this.world.obstacles);
     this.magic = new MagicSystem(this.scene, this.physics, this.effects);
     this.ui = new UIManager(root, (a, v) => this.action(a, v));
+    this.pipeline = new RenderPipeline(this.renderer, this.scene, this.camera);
+    this.applySettings();
     // Prime Rapier's query pipeline before the first camera or combat query.
     this.physics.step();
     this.player.sync();
@@ -115,6 +132,7 @@ export class GameManager {
       this.camera.aspect = window.innerWidth / window.innerHeight;
       this.camera.updateProjectionMatrix();
       this.renderer.setSize(window.innerWidth, window.innerHeight);
+      this.pipeline.resize();
     });
     window.addEventListener("blur", () => {
       if (this.phase === "playing") {
@@ -129,39 +147,15 @@ export class GameManager {
     });
     this.renderer.setAnimationLoop((t) => this.frame(t));
   }
-  private addSky() {
-    const sky = new THREE.Mesh(
-      new THREE.SphereGeometry(300, 24, 16),
-      new THREE.ShaderMaterial({
-        side: THREE.BackSide,
-        depthWrite: false,
-        uniforms: {
-          top: { value: new THREE.Color("#4e7779") },
-          horizon: { value: new THREE.Color("#e4d8ae") },
-        },
-        vertexShader:
-          "varying vec3 vPos; void main(){vPos=position;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}",
-        fragmentShader:
-          "uniform vec3 top;uniform vec3 horizon;varying vec3 vPos;void main(){float t=pow(clamp(normalize(vPos).y,0.,1.),.6);gl_FragColor=vec4(mix(horizon,top,t),1.);}",
-      }),
-    );
-    this.scene.add(sky);
-    const sun = new THREE.Mesh(
-      new THREE.SphereGeometry(7, 24, 16),
-      new THREE.MeshBasicMaterial({ color: "#fff1c4", fog: false }),
-    );
-    sun.position.set(-125, 95, -210);
-    this.scene.add(sun);
-  }
   private frame(timestamp: number) {
-    const dt = this.lastTime
-      ? Math.min(0.1, (timestamp - this.lastTime) / 1000)
+    const rawDt = this.lastTime
+      ? Math.max(0.001, (timestamp - this.lastTime) / 1000)
       : 1 / 60;
+    const dt = Math.min(0.1, rawDt);
     this.lastTime = timestamp;
     this.time += dt;
     this.frameCounter++;
-    if (this.frameCounter % 20 === 0)
-      this.fps = Math.round(1 / Math.max(0.001, dt));
+    if (this.frameCounter % 20 === 0) this.fps = Math.round(1 / rawDt);
     this.hotkeys();
     const running = this.phase === "playing" && this.panel === "none";
     this.input.active = running;
@@ -170,7 +164,9 @@ export class GameManager {
       if (this.cameraController.firstPerson)
         this.player.yaw = this.cameraController.yaw;
       this.actions();
-      this.accumulator += dt;
+      const pausedTime = Math.min(dt, this.hitStop);
+      this.hitStop = Math.max(0, this.hitStop - dt);
+      this.accumulator += dt - pausedTime;
       let steps = 0;
       while (
         this.accumulator >= 1 / 60 &&
@@ -180,8 +176,46 @@ export class GameManager {
         this.tick(1 / 60);
         this.accumulator -= 1 / 60;
         steps++;
+        if (this.hitStop > 0) {
+          this.accumulator = 0;
+          this.player.freezeInterpolation();
+          this.enemies.freezeInterpolation();
+          this.magic.freezeInterpolation();
+          break;
+        }
       }
-      this.cameraController.update(dt, this.player.position);
+      const animationDt = this.hitStop > 0 ? 0 : dt - pausedTime;
+      this.player.render(
+        this.accumulator * 60,
+        animationDt,
+        this.time,
+        this.cameraController.firstPerson,
+      );
+      this.enemies.render(this.accumulator * 60, animationDt, this.time);
+      this.magic.render(this.accumulator * 60);
+      if (this.player.consumeAttackStarted()) {
+        this.audio.play("swing");
+        this.lastAttackAt = this.time;
+      }
+      const landing = this.player.consumeLanding();
+      if (landing > 0) {
+        this.effects.dust(this.player.position, Math.min(2, landing / 5));
+        this.audio.play("land");
+      }
+      this.dustTimer += dt;
+      if (
+        this.player.grounded &&
+        this.player.sprinting &&
+        this.dustTimer > 0.17
+      ) {
+        this.dustTimer = 0;
+        this.effects.dust(this.player.position, 0.35);
+      }
+      this.cameraController.update(
+        dt,
+        this.player.renderPosition,
+        this.player.sprinting,
+      );
       this.player.model.group.visible = !this.cameraController.firstPerson;
       this.updateInteraction();
       if (this.time - this.lastSave > 30) {
@@ -200,6 +234,16 @@ export class GameManager {
         );
         this.camera.lookAt(-3, 3, -23);
         this.player.model.group.visible = true;
+        this.player.model.setLocomotion({
+          grounded: true,
+          verticalVelocity: 0,
+          turn: 0,
+          acceleration: 0,
+          landing: 0,
+          dodge: 0,
+          combo: 0,
+          speed: 0,
+        });
         this.player.model.update(dt, 0, 0, false, false, this.time);
       }
       if (this.phase === "dead")
@@ -210,22 +254,49 @@ export class GameManager {
     }
     this.input.mouseX = 0;
     this.input.mouseY = 0;
-    this.world.update(dt, this.time);
+    this.input.wheelDelta = 0;
+    this.atmosphere.update(dt, this.time, this.camera.position);
+    this.world.update(dt, this.time, this.camera);
     this.effects.update(dt);
     this.audio.update(dt, running && this.enemies.inCombat);
     if (this.messageTime > 0) {
       this.messageTime -= dt;
       if (this.messageTime <= 0) this.message = "";
     }
-    // A local shadow volume follows the player to keep close scenery crisp.
-    if (this.frameCounter % 10 === 0) {
-      const p = this.player.position;
-      this.sun.position.set(p.x - 32, 48, p.z + 25);
-      this.sun.target.position.set(p.x, 0, p.z);
-      this.sun.target.updateMatrixWorld();
+    // Snap the shadow volume to shadow-map texels, avoiding ten-frame jumps.
+    const extent = 76,
+      resolution = PRESETS[this.quality].shadowSize || 1024;
+    const texel = extent / resolution,
+      p = this.player.renderPosition;
+    const sx = Math.round(p.x / texel) * texel,
+      sz = Math.round(p.z / texel) * texel;
+    this.sun.position
+      .copy(this.atmosphere.sunOffset)
+      .add(new THREE.Vector3(sx, 0, sz));
+    this.sun.target.position.set(sx, 0, sz);
+    this.sun.target.updateMatrixWorld();
+    const maximum = Math.min(
+      window.devicePixelRatio,
+      PRESETS[this.quality].pixelRatio,
+    );
+    const ratio = this.adaptive.sample(
+      Math.min(rawDt, 0.5),
+      maximum,
+      this.settings.value.adaptiveQuality,
+    );
+    if (
+      this.settings.value.adaptiveQuality &&
+      Math.abs(ratio - this.renderer.getPixelRatio()) >= 0.045
+    ) {
+      this.renderer.setPixelRatio(ratio);
+      this.pipeline.resize();
     }
     this.ui.update(this.hud());
-    this.renderer.render(this.scene, this.camera);
+    this.pipeline.render(
+      dt,
+      running ? this.cameraController.motionStrength : 0,
+      running && this.player.sprinting,
+    );
   }
   private hotkeys() {
     if (this.input.take("Escape")) {
@@ -252,10 +323,10 @@ export class GameManager {
   }
   private actions() {
     if (this.input.take("Attack") || this.input.take("KeyR")) {
-      if (this.player.attack(this.input.down("ShiftLeft", "ShiftRight"))) {
-        this.audio.play("swing");
-        this.lastAttackAt = this.time;
-      } else if (this.player.stamina < 14)
+      if (
+        !this.player.attack(this.input.down("ShiftLeft", "ShiftRight")) &&
+        this.player.stamina < 14
+      )
         this.tell("You need a moment to catch your breath.");
     }
     if (this.input.take("Digit1")) {
@@ -294,6 +365,8 @@ export class GameManager {
     if (this.input.take("F5")) this.save();
   }
   private tick(dt: number) {
+    this.player.beginStep();
+    this.enemies.beginStep();
     this.player.update(
       dt,
       this.input,
@@ -309,12 +382,6 @@ export class GameManager {
     this.physics.step();
     this.player.sync();
     this.enemies.sync();
-    this.player.model.group.scale.y = this.input.down(
-      "ControlLeft",
-      "ControlRight",
-    )
-      ? 0.83
-      : 1;
     if (!this.player.alive) return;
     this.magic.update(dt, this.enemies, this.player, (e, d) => this.hit(e, d));
     const p = this.player;
@@ -344,7 +411,13 @@ export class GameManager {
           }
           this.hit(
             e,
-            (p.heavy ? 48 : 29) + p.upgrades.warrior * 5 + (p.level - 1) * 2,
+            Math.round(
+              ((p.heavy ? 48 : 29) +
+                p.upgrades.warrior * 5 +
+                (p.level - 1) * 2) *
+                (p.heavy ? 1 : 1 + p.comboIndex * 0.08),
+            ),
+            true,
           );
         }
     }
@@ -358,10 +431,26 @@ export class GameManager {
         SPAWN.z,
       );
       p.verticalVelocity = 0;
+      p.sync();
+      p.resetInterpolation();
     }
   }
-  private hit(enemy: Enemy, amount: number) {
+  private hit(enemy: Enemy, amount: number, melee = false) {
+    if (!this.player.alive || enemy.health <= 0 || enemy.state === "dormant")
+      return;
     const killed = this.enemies.damage(enemy, amount);
+    this.hitStop = Math.max(
+      this.hitStop,
+      melee ? (this.player.heavy ? 0.045 : 0.028) : 0.012,
+    );
+    this.cameraController.shake(
+      melee ? (this.player.heavy ? 0.55 : 0.32) : 0.22,
+    );
+    if (melee && this.player.heavy && !enemy.boss && !killed) {
+      enemy.state = "stunned";
+      enemy.timer = 0.35;
+      enemy.ring.visible = false;
+    }
     this.audio.play("hit");
     this.effects.burst(
       enemy.position.clone().add(new THREE.Vector3(0, 1.2, 0)),
@@ -402,7 +491,7 @@ export class GameManager {
   }
   private hurt(amount: number, enemy: Enemy) {
     const p = this.player;
-    if (p.invulnerable > 0 || !p.alive) return;
+    if (p.invulnerable > 0 || p.dodgeInvulnerable || !p.alive) return;
     const canBlock =
       p.blocking &&
       meleeHits(
@@ -412,6 +501,26 @@ export class GameManager {
         6,
         Math.PI * 0.4,
       );
+    if (canBlock && p.parryTime > 0 && enemy.attackType !== "slam") {
+      p.parryTime = 0;
+      enemy.state = "stunned";
+      enemy.timer = enemy.boss ? 0.55 : 1;
+      enemy.ring.visible = false;
+      this.audio.play("parry");
+      this.cameraController.shake(0.45);
+      this.hitStop = 0.045;
+      this.effects.burst(
+        p.position.clone().add(new THREE.Vector3(0, 1.3, 0)),
+        0xffdea1,
+        16,
+      );
+      this.effects.damage(
+        p.position.clone().add(new THREE.Vector3(0, 2.2, 0)),
+        "PARRY",
+      );
+      return;
+    }
+    this.cameraController.shake(canBlock ? 0.22 : 0.48);
     const block = damageAfterBlock(amount, canBlock, p.stamina);
     p.stamina -= block.staminaCost;
     p.health = Math.max(0, p.health - block.damage);
@@ -447,11 +556,7 @@ export class GameManager {
     p.potions--;
     p.health = Math.min(p.maxHealth, p.health + 65);
     this.audio.play("magic");
-    this.effects.burst(
-      p.position.clone().add(new THREE.Vector3(0, 1, 0)),
-      0xa4de9c,
-      16,
-    );
+    this.effects.heal(p.position.clone().add(new THREE.Vector3(0, 1, 0)));
     this.tell("Healing draught · +65 health");
   }
   private updateInteraction() {
@@ -559,19 +664,42 @@ export class GameManager {
         this.audio.toggle();
         break;
       case "quality":
-        this.quality = this.quality === "high" ? "low" : "high";
-        this.world.setQuality(this.quality === "high");
-        this.renderer.shadowMap.enabled = this.quality === "high";
-        this.renderer.setPixelRatio(
-          this.quality === "high" ? Math.min(window.devicePixelRatio, 1.7) : 1,
-        );
+        this.settings.value.quality =
+          value === undefined
+            ? this.quality === "low"
+              ? "high"
+              : "low"
+            : QUALITY_LEVELS[Math.max(0, Math.min(3, Math.round(value)))];
+        this.applySettings();
         break;
       case "sensitivity":
-        this.cameraController.sensitivity = THREE.MathUtils.clamp(
+        this.settings.value.sensitivity = THREE.MathUtils.clamp(
           value ?? 1,
           0.3,
           2,
         );
+        this.applySettings(false);
+        break;
+      case "fov":
+        this.settings.value.fov = THREE.MathUtils.clamp(value ?? 60, 50, 90);
+        this.applySettings(false);
+        break;
+      case "cameraEffects":
+        this.settings.value.cameraEffects = THREE.MathUtils.clamp(
+          value ?? 0.6,
+          0,
+          1,
+        );
+        this.applySettings(false);
+        break;
+      case "motionBlur":
+        this.settings.value.motionBlur = !this.settings.value.motionBlur;
+        this.applySettings();
+        break;
+      case "adaptiveQuality":
+        this.settings.value.adaptiveQuality =
+          !this.settings.value.adaptiveQuality;
+        this.applySettings();
         break;
       case "acceptQuest":
         this.questAccepted = true;
@@ -630,6 +758,7 @@ export class GameManager {
       SPAWN.z,
     );
     p.sync();
+    p.resetInterpolation();
     p.yaw = 0;
     this.cameraController.yaw = 0;
     this.cameraController.pitch = 0.27;
@@ -642,6 +771,7 @@ export class GameManager {
     this.save(false);
   }
   private resetWorld() {
+    this.hitStop = 0;
     this.enemies.reset();
     this.magic.clear();
     this.world.resetInteractables();
@@ -656,15 +786,25 @@ export class GameManager {
       SPAWN.z,
     );
     this.player.sync();
+    this.player.resetInterpolation();
+    this.hitStop = 0;
     for (const e of this.enemies.enemies)
       if (e.health > 0) {
         e.health = e.maxHealth;
         e.phase = 1;
         e.state = e.boss ? "dormant" : "patrol";
         e.position.copy(e.home);
+        e.previousPosition.copy(e.home);
+        e.motion = 0;
+        e.animation = 0;
+        e.timer = 0;
+        e.ring.visible = false;
+        e.healthBar.visible = false;
         if (e.actor)
           this.physics.teleport(e.actor, e.home.x, e.home.y, e.home.z);
       }
+    this.enemies.sync();
+    this.enemies.freezeInterpolation();
     this.magic.clear();
     this.phase = "playing";
     this.panel = "none";
@@ -734,6 +874,8 @@ export class GameManager {
     p.verticalVelocity = 0;
     p.velocity.set(0, 0, 0);
     p.invulnerable = 2;
+    p.clearActions();
+    this.hitStop = 0;
     p.attackTime = 0;
     p.attackCooldown = 0;
     p.dodgeTime = 0;
@@ -749,6 +891,7 @@ export class GameManager {
       s.position.z,
     );
     p.sync();
+    p.resetInterpolation();
     for (const id of s.deadEnemies) this.enemies.kill(this.enemies.enemies[id]);
     for (const id of s.openedChests) {
       const i = this.world.interactables.find((i) => i.id === id);
@@ -763,6 +906,34 @@ export class GameManager {
     this.cameraController.snap(p.position);
     this.tell("Your journey continues.");
     this.lastSave = this.time;
+  }
+  private applySettings(graphics = true) {
+    const prefs = this.settings.value;
+    this.quality = prefs.quality;
+    this.cameraController.sensitivity = prefs.sensitivity;
+    this.cameraController.fov = prefs.fov;
+    this.cameraController.effectsIntensity = prefs.cameraEffects;
+    if (graphics) {
+      const preset = PRESETS[prefs.quality];
+      this.world.setQuality(prefs.quality);
+      this.atmosphere.setQuality(prefs.quality);
+      this.effects.setBudget(preset.particles);
+      this.renderer.shadowMap.enabled = preset.shadowSize > 0;
+      this.sun.castShadow = preset.shadowSize > 0;
+      if (
+        preset.shadowSize > 0 &&
+        this.sun.shadow.mapSize.x !== preset.shadowSize
+      ) {
+        this.sun.shadow.mapSize.set(preset.shadowSize, preset.shadowSize);
+        this.sun.shadow.map?.dispose();
+        this.sun.shadow.map = null;
+      }
+      const ratio = Math.min(window.devicePixelRatio, preset.pixelRatio);
+      this.renderer.setPixelRatio(ratio);
+      this.adaptive.reset(ratio);
+      this.pipeline.configure(prefs);
+    }
+    this.settings.save();
   }
   hud(): HudState {
     const p = this.player,
@@ -799,13 +970,20 @@ export class GameManager {
             : p.position.z > -46
               ? "Ruins of the First Age"
               : "The Fallen Sanctuary",
-      time: "18:42",
+      time: `${String(Math.floor(this.atmosphere.hour)).padStart(2, "0")}:${String(Math.floor((this.atmosphere.hour % 1) * 60)).padStart(2, "0")}`,
       interaction: this.interaction,
       message: this.message,
       spellCooldown: p.spellCooldown,
       dodgeCooldown: p.dodgeCooldown,
       muted: !this.audio.enabled,
       quality: this.quality,
+      fov: this.settings.value.fov,
+      cameraEffects: this.settings.value.cameraEffects,
+      motionBlur: this.settings.value.motionBlur,
+      adaptiveQuality: this.settings.value.adaptiveQuality,
+      timeOfDay: this.atmosphere.hour,
+      combo: p.attacking && !p.heavy ? p.comboIndex + 1 : 0,
+      parryReady: p.parryTime > 0,
       hasSave: this.saves.hasSave(),
       enemies: this.enemies.enemies.map((e) => ({
         x: e.position.x,

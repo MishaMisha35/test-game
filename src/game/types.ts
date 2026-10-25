@@ -1,3 +1,4 @@
+import type { QualityPreset } from "./SettingsSystem";
 export type Phase = "menu" | "playing" | "paused" | "dead" | "victory";
 export type Panel =
   "none" | "inventory" | "journal" | "map" | "skills" | "settings" | "help";
@@ -37,7 +38,14 @@ export interface HudState {
   spellCooldown: number;
   dodgeCooldown: number;
   muted: boolean;
-  quality: "high" | "low";
+  quality: QualityPreset;
+  fov: number;
+  cameraEffects: number;
+  motionBlur: boolean;
+  adaptiveQuality: boolean;
+  timeOfDay: number;
+  combo: number;
+  parryReady: boolean;
   hasSave: boolean;
   enemies: Array<Point & { boss: boolean; alive: boolean }>;
   objective: Point;
@@ -56,6 +64,10 @@ export type UIAction =
   | "sound"
   | "quality"
   | "sensitivity"
+  | "fov"
+  | "cameraEffects"
+  | "motionBlur"
+  | "adaptiveQuality"
   | "acceptQuest"
   | "close"
   | "inventory"

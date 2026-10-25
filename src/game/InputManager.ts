@@ -5,6 +5,7 @@ export class InputManager {
   secondary = false;
   mouseX = 0;
   mouseY = 0;
+  wheelDelta = 0;
   active = false;
   private dragging = false;
   constructor(private canvas: HTMLCanvasElement) {
@@ -13,7 +14,7 @@ export class InputManager {
       if (
         [
           "Space",
-          "Tab",
+          "CapsLock",
           "KeyW",
           "KeyA",
           "KeyS",
@@ -39,6 +40,7 @@ export class InputManager {
         this.pressed.add("Attack");
       }
       if (e.button === 2) {
+        if (!this.secondary) this.pressed.add("Block");
         this.secondary = true;
         this.dragging = true;
       }
@@ -50,6 +52,15 @@ export class InputManager {
         this.dragging = false;
       }
     });
+    canvas.addEventListener(
+      "wheel",
+      (e) => {
+        if (!this.active) return;
+        e.preventDefault();
+        this.wheelDelta += Math.max(-120, Math.min(120, e.deltaY));
+      },
+      { passive: false },
+    );
     canvas.addEventListener("contextmenu", (e) => e.preventDefault());
     window.addEventListener("mousemove", (e) => {
       if (
@@ -76,6 +87,7 @@ export class InputManager {
     this.pressed.clear();
     this.mouseX = 0;
     this.mouseY = 0;
+    this.wheelDelta = 0;
   }
   reset() {
     this.keys.clear();
@@ -85,5 +97,6 @@ export class InputManager {
     this.dragging = false;
     this.mouseX = 0;
     this.mouseY = 0;
+    this.wheelDelta = 0;
   }
 }

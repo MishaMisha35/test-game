@@ -1,13 +1,14 @@
 import { _electron as electron } from "@playwright/test";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import assert from "node:assert/strict";
 
 const root = resolve(import.meta.dirname, "..");
 const executable = process.argv[2];
+const version=JSON.parse(await readFile(join(root,'package.json'),'utf8')).version;
 const testOnlyFlags =
   process.env.ETERNAL_TEST_NO_SANDBOX === "1" ? ["--no-sandbox"] : [];
-const resultDir = join(root, "test-results", executable ? "desktop-packaged" : "desktop");
+const resultDir = join(root, "test-results", executable ? `desktop-packaged-${version}` : `desktop-${version}`);
 await mkdir(resultDir, { recursive: true });
 const errors = [];
 const desktop = await electron.launch({
@@ -39,6 +40,11 @@ try {
   await page.waitForFunction(() => !!window.__game, undefined, {
     timeout: 60000,
   });
+  await page.evaluate(()=>{
+    const g=window.__game;
+    if(g.settings?.value.adaptiveQuality)g.action('adaptiveQuality');
+    g.action('quality',2);
+  });
   const start = await page.evaluate(() => {
     const g = window.__game;
     return {
@@ -54,10 +60,14 @@ try {
   assert(start.canvas.width > 900 && start.canvas.height > 500);
   assert(start.objects > 50);
   await page.screenshot({ path: join(resultDir, "desktop-menu.png") });
-  // Exercise the shipped performance setting on this software-rendered test host.
-  await page.evaluate(() => {
-    if (window.__game.quality === "high") window.__game.action("quality");
-  });
+  const highMetrics=await page.evaluate(()=>new Promise(resolve=>{
+    const renderer=window.__game.renderer;renderer.info.autoReset=false;
+    requestAnimationFrame(()=>{renderer.info.reset();requestAnimationFrame(()=>{
+      resolve({calls:renderer.info.render.calls,triangles:renderer.info.render.triangles,memory:{...renderer.info.memory},pixelRatio:renderer.getPixelRatio(),quality:window.__game.quality});renderer.info.autoReset=true;
+    });});
+  }));
+  // Exercise the shipped Low setting on this software-rendered test host.
+  await page.evaluate(() => window.__game.action('quality',0));
   // Exercise the real integrated game, not a synthetic replacement scene.
   await page
     .getByRole("button", { name: "Begin your journey", exact: true })
@@ -118,9 +128,10 @@ try {
   await page.screenshot({ path: join(resultDir, "desktop-playing.png") });
   assert.deepEqual(errors, [], "No renderer errors");
   const report = {
+    version, highMetrics,
     target: executable || "development Electron",
     rendering:
-      "SwiftShader; Performance preset after full-quality menu capture; not a hardware benchmark",
+      "SwiftShader; explicit High menu capture with adaptive resolution off, then shipped Low preset; not a hardware benchmark",
     menu: start,
     movement: { before, after },
     fullscreen,

@@ -65,13 +65,14 @@ export class UIManager {
   <header class="topbar"><div class="brand" aria-label="Eternal Realms"><span class="brand-mark">E</span><span>ETERNAL REALMS<small>SHADOW OF THE ANCIENTS</small></span></div><nav class="top-actions">${button("help", "Field guide", "quiet", "book")}${button("settings", "Settings", "icon-button", "settings")}${button("sound", "Sound", "icon-button sound-button", "sound")}</nav></header>
   <section class="menu-content" id="menu-content"><p class="eyebrow"><span></span> A NEW CHAPTER AWAITS</p><h1>A forgotten world.<br><em>An unwritten<br class="wide-break"> legend.</em></h1><p class="menu-lore">Beyond the veil of an ancient forest, something stirs.<br>Take up your blade. Follow the light. Find your own way.</p><div class="menu-buttons">${button("start", "Begin your journey", "primary", "arrow")}${button("continue", "Continue journey", "secondary", "save")}</div><div class="menu-note"><i></i> CHAPTER I <span>THE WHISPERING VEIL</span></div></section>
   <aside class="vista-label" id="vista-label"><span class="tiny">THE BORDERLANDS</span><h3>The Whispering Veil</h3><p>Where the old world still remembers.</p><span class="vista-line"></span><small>38° 24′ N &nbsp; · &nbsp; 12° 08′ E</small></aside>
-  <footer class="menu-footer" id="menu-footer"><span>AN ADVENTURE BEGINS WITH A SINGLE STEP.</span><span>PLAYABLE PROLOGUE <i>✦</i> v0.1</span></footer>
+  <footer class="menu-footer" id="menu-footer"><span>AN ADVENTURE BEGINS WITH A SINGLE STEP.</span><span>v0.2 <i>✦</i> ULTRA SMOOTH</span></footer>
   <div id="hud" class="hidden"><div class="player-name"><span class="avatar">${icon("shield")}</span><span><small>THE WAYFARER</small><b id="hero-name">Wanderer</b></span><span class="level">LV <b id="level">1</b></span></div>
   <div class="compass"><div class="compass-rule"></div><span id="compass-heading">N</span><b>◆</b><small id="location">The Whispering Veil</small></div>
   <aside class="quest-card"><p class="tiny">THE ANCIENTS' CALL</p><div class="quest-title"><span class="quest-diamond">◇</span><h3 id="quest-title">A light in the darkness</h3></div><p id="quest-detail">Speak to the keeper by the village.</p><button type="button" data-action="journal" class="text-link">View journal <kbd>J</kbd></button></aside>
   <div class="boss-bar hidden" id="boss-bar"><small>THE FALLEN GUARDIAN</small><div><i id="boss-fill"></i></div><span id="boss-health"></span></div>
   <div class="vitals"><div class="vitals-heading"><span id="health-label">100 / 100</span><small>VITALITY</small></div><div class="bar health"><i id="health-fill"></i></div><div class="resource"><span>${icon("spark")}</span><div class="bar mana"><i id="mana-fill"></i></div><small id="mana-label"></small></div><div class="resource"><span>${icon("dodge")}</span><div class="bar stamina"><i id="stamina-fill"></i></div><small id="stamina-label"></small></div><div class="xp-line"><span id="xp-label">0 / 100 XP</span><i><b id="xp-fill"></b></i></div></div>
   <div class="hotbar"><div class="slot" id="magic-slot"><div>${icon("flame")}<kbd>F</kbd><span id="spell-cooldown"></span></div><small>Cast spell</small></div><div class="slot" id="dodge-slot"><div>${icon("dodge")}<kbd>Q</kbd><span id="dodge-cooldown"></span></div><small>Evade</small></div><button class="slot" data-action="heal" id="heal-slot"><div>${icon("potion")}<kbd>H</kbd><b id="potion-count">3</b></div><small>Restore</small></button><span class="hotbar-divider"></span><button class="small-slot" data-action="inventory" aria-label="Inventory">${icon("bag")}<kbd>I</kbd></button><button class="small-slot" data-action="map" aria-label="Map">${icon("map")}<kbd>M</kbd></button><button class="small-slot" data-action="skills" aria-label="Skills">${icon("spark")}<kbd>K</kbd></button></div>
+  <div id="combat-cue" class="combat-cue hidden" aria-hidden="true"></div>
   <div class="interact hidden" id="interact"><kbd>E</kbd><span id="interaction-label"></span></div>
   <div class="minimap-shell"><div class="minimap-heading"><span id="map-time">17:30</span><button data-action="map" aria-label="Open world map">${icon("map")}</button></div><svg id="minimap" viewBox="0 0 180 180" aria-label="Minimap"></svg><div class="minimap-footer"><span id="region-name">BORDERLANDS</span><b>N ↑</b></div></div>
   <div class="game-hints"><span><kbd>W A S D</kbd> Move</span><span><kbd>Mouse</kbd> Look</span><span><kbd>LMB</kbd> Attack</span><span><kbd>Esc</kbd> Pause</span></div></div>
@@ -80,9 +81,15 @@ export class UIManager {
   <div id="outcome" class="outcome hidden"></div>`;
     this.container.addEventListener("click", this.click);
     this.container.addEventListener("input", this.input);
+    this.container.addEventListener("change", this.change);
   }
   private click = (event: Event) => {
-    if (event.target instanceof HTMLInputElement) return;
+    if (
+      event.target instanceof HTMLInputElement ||
+      event.target instanceof HTMLSelectElement ||
+      event.target instanceof HTMLOptionElement
+    )
+      return;
     const el = (event.target as HTMLElement).closest<HTMLElement>(
       "[data-action]",
     );
@@ -92,12 +99,97 @@ export class UIManager {
     this.onAction(el.dataset.action as UIAction);
   };
   private input = (event: Event) => {
-    const el = event.target as HTMLInputElement;
-    if (el.dataset.action === "sensitivity") {
-      el.setAttribute("aria-valuetext", `${Number(el.value).toFixed(1)} times`);
-      this.onAction("sensitivity", Number(el.value));
+    const el = event.target;
+    if (!(el instanceof HTMLInputElement)) return;
+    const action = el.dataset.action as UIAction;
+    if (["sensitivity", "fov", "cameraEffects"].includes(action)) {
+      const value = Number(el.value);
+      el.setAttribute(
+        "aria-valuetext",
+        action === "fov"
+          ? `${value} degrees`
+          : action === "cameraEffects"
+            ? `${Math.round(value * 100)} percent`
+            : `${value.toFixed(1)} times`,
+      );
+      this.onAction(action, value);
     }
   };
+  private change = (event: Event) => {
+    const el = event.target;
+    if (el instanceof HTMLSelectElement && el.dataset.action === "quality")
+      this.onAction("quality", Number(el.value));
+  };
+  /** Update settings in place so keyboard focus survives changes to the renderer. */
+  private syncSettings(s: HudState) {
+    const values: Record<string, number> = {
+      sensitivity: s.sensitivity,
+      fov: s.fov,
+      cameraEffects: s.cameraEffects,
+    };
+    for (const [action, value] of Object.entries(values)) {
+      const control = this.container.querySelector<HTMLInputElement>(
+        `input[data-action="${action}"]`,
+      );
+      if (!control) continue;
+      if (document.activeElement !== control) control.value = String(value);
+      control.setAttribute(
+        "aria-valuetext",
+        action === "fov"
+          ? `${value} degrees`
+          : action === "cameraEffects"
+            ? `${Math.round(value * 100)} percent`
+            : `${value.toFixed(1)} times`,
+      );
+      const text =
+        action === "fov"
+          ? `${Math.round(value)}°`
+          : action === "cameraEffects"
+            ? value === 0
+              ? "Off"
+              : `${Math.round(value * 100)}%`
+            : `${value.toFixed(1)}×`;
+      const output = this.container.querySelector<HTMLOutputElement>(
+        `output[data-value="${action}"]`,
+      );
+      if (output && output.textContent !== text) output.textContent = text;
+    }
+    const quality = this.container.querySelector<HTMLSelectElement>(
+      'select[data-action="quality"]',
+    );
+    if (quality && document.activeElement !== quality)
+      quality.value = String(
+        ["low", "medium", "high", "ultra"].indexOf(s.quality),
+      );
+    const toggles: Array<[UIAction, boolean]> = [
+      ["sound", !s.muted],
+      ["motionBlur", s.motionBlur],
+      ["adaptiveQuality", s.adaptiveQuality],
+    ];
+    for (const [action, enabled] of toggles) {
+      const control = this.container.querySelector<HTMLButtonElement>(
+        `.settings-panel button[data-action="${action}"]`,
+      );
+      if (!control) continue;
+      control.setAttribute("aria-pressed", String(enabled));
+      if (action === "sound" && control.dataset.enabled !== String(enabled)) {
+        const svg = control.querySelector("svg");
+        if (svg) svg.outerHTML = icon(enabled ? "sound" : "mute");
+      }
+      control.dataset.enabled = String(enabled);
+      const span = control.querySelector("span");
+      if (span)
+        span.textContent =
+          action === "sound"
+            ? enabled
+              ? "Sound on"
+              : "Sound off"
+            : enabled
+              ? "On"
+              : "Off";
+      control.classList.toggle("enabled", enabled);
+    }
+  }
   private get(id: string) {
     return this.container.querySelector<HTMLElement>("#" + id)!;
   }
@@ -153,6 +245,25 @@ export class UIManager {
       state.dodgeCooldown > 0 ? state.dodgeCooldown.toFixed(1) : "",
     );
     this.get("magic-slot").classList.toggle("cooling", state.spellCooldown > 0);
+    this.get("magic-slot").style.setProperty(
+      "--cooldown-angle",
+      `${Math.min(1, Math.max(0, state.spellCooldown / 1.6)) * 360}deg`,
+    );
+    this.get("dodge-slot").style.setProperty(
+      "--cooldown-angle",
+      `${Math.min(1, Math.max(0, state.dodgeCooldown / 1.1)) * 360}deg`,
+    );
+    const combatCue = state.parryReady
+      ? "GUARD · PERFECT WINDOW"
+      : state.combo > 0
+        ? `CHAIN ×${state.combo}`
+        : "";
+    this.set("combat-cue", combatCue);
+    this.get("combat-cue").classList.toggle(
+      "hidden",
+      !combatCue || state.phase !== "playing" || state.panel !== "none",
+    );
+    this.get("combat-cue").classList.toggle("guard-ready", state.parryReady);
     this.get("dodge-slot").classList.toggle("cooling", state.dodgeCooldown > 0);
     this.set("location", state.location);
     this.set("map-time", state.time);
@@ -192,25 +303,29 @@ export class UIManager {
     );
     this.set("interaction-label", state.interaction);
     this.get("minimap").innerHTML = this.map(state, false);
-    const signature = [
-      state.phase,
-      state.panel,
-      state.potions,
-      state.gold,
-      state.level,
-      state.kills,
-      state.questAccepted,
-      state.questComplete,
-      state.muted,
-      state.quality,
-      state.hasSave,
-      state.health | 0,
-      state.maxStamina,
-    ].join("|");
+    const signature =
+      state.panel === "settings"
+        ? `${state.phase}|settings`
+        : [
+            state.phase,
+            state.panel,
+            state.potions,
+            state.gold,
+            state.level,
+            state.kills,
+            state.questAccepted,
+            state.questComplete,
+            state.muted,
+            state.quality,
+            state.hasSave,
+            state.health | 0,
+            state.maxStamina,
+          ].join("|");
     if (signature !== this.lastPanel) {
       this.lastPanel = signature;
       this.renderPanel(state);
     }
+    if (state.panel === "settings") this.syncSettings(state);
     if (state.panel === "map") {
       const map = this.container.querySelector("#world-map");
       if (map) map.innerHTML = this.map(state, true);
@@ -319,21 +434,32 @@ export class UIManager {
           "",
         )}</div><p class="panel-note">Your purse holds ${s.gold} gold. Training can be repeated.</p>`;
     if (s.panel === "settings")
-      body = `<div class="settings-row"><div><h3>Soundscape</h3><p>Atmosphere, footsteps and the clash of steel.</p></div>${button("sound", s.muted ? "Sound off" : "Sound on", "secondary", s.muted ? "mute" : "sound")}</div><div class="settings-row"><div><h3>Visual quality</h3><p>Choose detailed shadows or lighter rendering.</p></div>${button("quality", s.quality === "high" ? "High quality" : "Performance", "secondary", "eye")}</div><div class="settings-row"><div><h3>Look sensitivity</h3><p>Set the pace of your camera.</p></div><label class="range-label"><span>Slow</span><input aria-label="Camera sensitivity" type="range" min="0.3" max="2" step="0.1" value="${s.sensitivity}" aria-valuetext="${s.sensitivity.toFixed(1)} times" data-action="sensitivity"><span>Fast</span></label></div><p class="panel-note">Eternal Realms · Shadow of the Ancients<br>Chapter I · Playable prologue · All art and sound generated locally.</p>`;
+      body = `<div class="settings-row"><div><h3>Soundscape</h3><p>Atmosphere, footsteps and the clash of steel.</p></div>${button("sound", s.muted ? "Sound off" : "Sound on", "secondary setting-toggle", s.muted ? "mute" : "sound")}</div>
+      <div class="settings-row"><div><h3>Visual quality</h3><p>Four presets for your journey, from light to detailed.</p></div><label class="select-label"><select aria-label="Visual quality" data-action="quality">${["Low", "Medium", "High", "Ultra"].map((q, i) => `<option value="${i}" ${q.toLowerCase() === s.quality ? "selected" : ""}>${q}</option>`).join("")}</select></label></div>
+      <div class="settings-row"><div><h3>Look sensitivity</h3><p>Set the pace of your camera.</p></div><label class="range-label"><input aria-label="Camera sensitivity" type="range" min="0.3" max="2" step="0.1" value="${s.sensitivity}" data-action="sensitivity"><output data-value="sensitivity">${s.sensitivity.toFixed(1)}×</output></label></div>
+      <div class="settings-row"><div><h3>Field of view</h3><p>Choose a close view or a wider horizon.</p></div><label class="range-label"><input aria-label="Field of view" type="range" min="50" max="90" step="1" value="${s.fov}" data-action="fov"><output data-value="fov">${Math.round(s.fov)}°</output></label></div>
+      <div class="settings-row"><div><h3>Camera effects</h3><p>Strength of camera motion and impact feedback. Zero turns them off.</p></div><label class="range-label"><input aria-label="Camera effects intensity" type="range" min="0" max="1" step="0.05" value="${s.cameraEffects}" data-action="cameraEffects"><output data-value="cameraEffects">${Math.round(s.cameraEffects * 100)}%</output></label></div>
+      <div class="settings-row"><div><h3>Motion blur</h3><p>Optional camera-motion softening. Off gives the clearest view.</p></div>${button("motionBlur", s.motionBlur ? "On" : "Off", "secondary setting-toggle")}</div>
+      <div class="settings-row"><div><h3>Adaptive resolution</h3><p>Automatically adjust rendering resolution to keep motion smooth.</p></div>${button("adaptiveQuality", s.adaptiveQuality ? "On" : "Off", "secondary setting-toggle")}</div>
+      <p class="panel-note">Settings are remembered between journeys.<br>Eternal Realms · v0.2 Ultra Smooth · All art and sound generated locally.</p>`;
     if (s.panel === "help")
       body = `<p class="panel-description">Follow the old road north. Speak to the keeper, defeat the corrupted sentinels, and discover what waits in the ancient sanctum.</p><div class="control-columns"><div><h3>Explore</h3>${[
         ["W A S D", "Move"],
         ["Mouse", "Look around"],
         ["Shift", "Sprint"],
+        ["Caps Lock", "Toggle walk"],
         ["Space", "Jump"],
         ["Ctrl", "Crouch"],
         ["E", "Interact"],
         ["V", "First / third person"],
+        ["B", "Switch shoulder"],
+        ["Mouse wheel", "Zoom camera"],
       ]
         .map(([k, v]) => `<p><kbd>${k}</kbd><span>${v}</span></p>`)
         .join("")}</div><div><h3>Stand your ground</h3>${[
-        ["Left mouse", "Attack · Shift for heavy"],
-        ["Right mouse", "Block / rotate camera"],
+        ["Left mouse", "Chain light attacks"],
+        ["Shift + LMB", "Heavy attack"],
+        ["Right mouse", "Block · initial press parries"],
         ["Q", "Evade"],
         ["F", "Cast selected spell"],
         ["1 / 2", "Ready ember / frost"],
@@ -360,6 +486,7 @@ export class UIManager {
     window.clearTimeout(this.toastTimer);
     this.container.removeEventListener("click", this.click);
     this.container.removeEventListener("input", this.input);
+    this.container.removeEventListener("change", this.change);
     this.container.remove();
   }
 }
