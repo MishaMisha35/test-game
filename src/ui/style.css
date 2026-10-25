@@ -2442,3 +2442,27 @@ h1 em {
     transition: none !important;
   }
 }
+
+/* Combat Evolution: compact timing cues, distinct from health and stamina. */
+.combat-cue { bottom:151px; }
+.combat-cue.guard-broken { color:#e4a28b; }
+.attack-readout { position:absolute; bottom:121px; left:50%; transform:translateX(-50%); width:122px; text-align:center; pointer-events:none; }
+.attack-readout>span { display:block; font-size:6px; letter-spacing:1.8px; color:#c8c9ae; margin-bottom:6px; text-shadow:0 2px 6px #09251c; }
+.attack-readout>div { height:3px; background:#102b22a8; border:1px solid #cbb88440; }
+.attack-readout i { display:block; height:100%; width:0; background:#c9b885; transition:width 60ms linear; }
+.attack-readout[data-phase="active"] i { background:#f1dca1; box-shadow:0 0 7px #dec47d6b; }
+.attack-readout[data-phase="recovery"] i { background:#93a68b; }
+.attack-readout[data-phase="charging"] i { background:#d9c092; }
+.boss-bar .boss-phase { display:block; margin-top:6px; color:#b8bca1; font-size:6px; letter-spacing:1.4px; }
+.boss-bar.mini-boss>small { color:#d2dda9; }
+.boss-bar.mini-boss #boss-fill { background:#9ba56e; }
+.optional-encounter { border:1px solid #b4bf8640; padding:17px; margin:23px 0; background:#263a282e; }
+.optional-encounter h4 { font:19px Georgia,serif; color:#d8d1ad; margin:12px 0 8px; }
+.optional-encounter p { font-size:10px; line-height:1.8; color:#a7b69b; margin-bottom:14px; }
+.optional-encounter.complete { border-color:#c4bc6c70; }
+.optional-reward { color:#c6b782; font-size:8px; line-height:1.7; }
+.optional-reward>span { margin:0 5px; color:#7f947b; }
+.warden-dot { background:#abc58b; border-radius:0!important; transform:rotate(45deg); }
+@media(max-width:800px) { .combat-cue { bottom:125px; } .attack-readout { bottom:95px; width:110px; } }
+@media(max-width:520px) { .combat-cue { bottom:132px; font-size:6px; } .attack-readout { bottom:104px; width:105px; } .attack-readout>span { font-size:5px; } .optional-encounter { padding:13px; } .optional-encounter h4 { font-size:17px; } .optional-encounter p { font-size:9px; } }
+@media(prefers-reduced-motion:reduce) { .attack-readout i { transition:none!important; } }

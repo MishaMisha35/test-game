@@ -2,7 +2,7 @@ import type { QualityPreset } from "./SettingsSystem";
 export type Phase = "menu" | "playing" | "paused" | "dead" | "victory";
 export type Panel =
   "none" | "inventory" | "journal" | "map" | "skills" | "settings" | "help";
-export type EnemyKind = "wraith" | "guardian";
+export type EnemyKind = "wraith" | "guardian" | "warden";
 export interface Point {
   x: number;
   z: number;
@@ -46,8 +46,16 @@ export interface HudState {
   timeOfDay: number;
   combo: number;
   parryReady: boolean;
+  attackPhase: string;
+  charge: number;
+  counterReady: boolean;
+  guardBroken: boolean;
+  miniBossDefeated: boolean;
+  bossName: string;
+  bossPhase: number;
+  bossIsMini: boolean;
   hasSave: boolean;
-  enemies: Array<Point & { boss: boolean; alive: boolean }>;
+  enemies: Array<Point & { boss: boolean; alive: boolean; miniBoss?: boolean }>;
   objective: Point;
   fps: number;
   sensitivity: number;
@@ -103,3 +111,5 @@ export const ENEMY_SPAWNS = [
   { x: 20, z: -37 },
 ];
 export const BOSS_SPAWN = { x: 0, z: -58 };
+
+export const MINI_BOSS_SPAWN = { x: -21, z: -24 };

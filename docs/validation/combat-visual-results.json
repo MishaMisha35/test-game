@@ -1,0 +1,39 @@
+{
+  "version": "2.1.0",
+  "renderer": "SwiftShader; shipped High preset, pixel ratio 1 and adaptive resolution disabled; not a hardware FPS benchmark",
+  "fixture": "Only player placement near the existing forest encounter; AI and full enemy health remain real",
+  "capture": {
+    "quality": "high",
+    "adaptiveQuality": false,
+    "pixelRatio": 1,
+    "canvas": {
+      "width": 1440,
+      "height": 876
+    },
+    "calls": 487,
+    "triangles": 131644,
+    "points": 536,
+    "memory": {
+      "geometries": 335,
+      "textures": 16
+    },
+    "sceneObjects": 261,
+    "phase": "playing",
+    "playerHealth": 120,
+    "boss": {
+      "id": 5,
+      "name": "Thornbound Warden",
+      "state": "windup",
+      "phase": 1,
+      "health": 240,
+      "maxHealth": 240,
+      "position": {
+        "x": -21.21159553527832,
+        "y": -1.8850934863090516,
+        "z": -23.269161224365234
+      }
+    },
+    "bossHudVisible": true
+  },
+  "rendererErrors": []
+}

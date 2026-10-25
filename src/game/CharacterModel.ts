@@ -12,7 +12,16 @@ export interface LocomotionState {
   speed: number;
 }
 
-type Kind = "hero" | "wraith" | "guardian" | "npc";
+export interface CombatPose {
+  phase: "idle" | "windup" | "active" | "recovery" | "charging";
+  heavy: boolean;
+  charge: number;
+  counter: boolean;
+  stagger: number;
+  guardBroken: boolean;
+}
+
+type Kind = "hero" | "wraith" | "guardian" | "warden" | "npc";
 
 /** Original low-poly, articulated characters. All actors face local -Z. */
 export class CharacterModel {
@@ -57,6 +66,14 @@ export class CharacterModel {
   private trailFade = 0;
   private trailSampleTime = 0;
   private trailActive = false;
+  private hasCombatPose = false;
+  private readonly combatPose: CombatPose = { phase: "idle", heavy: false, charge: 0, counter: false, stagger: 0, guardBroken: false };
+  private recoilTime = 0;
+  private recoilStrength = 0;
+  private enraged = false;
+  private rageAmount = 0;
+  private rageMaterial?: THREE.MeshStandardMaterial;
+  private readonly rageColor = new THREE.Color(0xe8a853);
   private hasLocomotion = false;
   private locomotion: LocomotionState = {
     grounded: true,
@@ -74,10 +91,25 @@ export class CharacterModel {
     this.hasLocomotion = true;
   }
 
+  setCombatPose(pose: Partial<CombatPose>): void {
+    Object.assign(this.combatPose, pose);
+    this.hasCombatPose = true;
+  }
+
+  reactToHit(strength = 0.7): void {
+    const power = Number.isFinite(strength) ? THREE.MathUtils.clamp(strength, 0, 1) : 0.7;
+    this.recoilStrength = Math.max(this.recoilStrength * this.recoilTime / 0.24, power);
+    this.recoilTime = 0.24;
+    this.flash();
+  }
+
+  setEnraged(enabled: boolean): void { this.enraged = enabled; }
+
   constructor(private readonly kind: Kind) {
     this.group.name = `${kind}-character`;
     this.group.add(this.rig);
-    const enemy = kind === "wraith" || kind === "guardian";
+    const warden = kind === "warden";
+    const enemy = kind === "wraith" || kind === "guardian" || warden;
     const boss = kind === "guardian";
     const npc = kind === "npc";
     const material = (
@@ -100,26 +132,29 @@ export class CharacterModel {
       this.emissionLevels.set(m, m.emissiveIntensity);
       return m;
     };
-    const cloth = material(npc ? 0x80654a : enemy ? 0x202d35 : 0x4d6251);
-    const leather = material(enemy ? 0x253437 : 0x49392b);
-    const steel = material(enemy ? 0x42616a : 0x9ba7a0, 0.67, 0.39);
-    const darkSteel = material(enemy ? 0x25343c : 0x4b5d58, 0.6, 0.49);
-    const trim = material(enemy ? 0x668c82 : 0xc6a46b, 0.66, 0.42);
+    const cloth = material(warden ? 0x344b39 : npc ? 0x80654a : enemy ? 0x202d35 : 0x4d6251);
+    const leather = material(warden ? 0x514831 : enemy ? 0x253437 : 0x49392b);
+    const steel = material(warden ? 0x526342 : enemy ? 0x42616a : 0x9ba7a0, warden ? 0.16 : 0.67, warden ? 0.82 : 0.39);
+    const darkSteel = material(warden ? 0x3b4935 : enemy ? 0x25343c : 0x4b5d58, warden ? 0.12 : 0.6, warden ? 0.9 : 0.49);
+    const trim = material(warden ? 0xb59854 : enemy ? 0x668c82 : 0xc6a46b, 0.66, 0.42);
     const skin = material(npc ? 0xbd9472 : enemy ? 0x17272c : 0xba987c);
     const glow = material(
-      enemy ? 0x83ddd3 : 0xe5ca8c,
+      warden ? 0x7fbf7a : enemy ? 0x83ddd3 : 0xe5ca8c,
       0.2,
       0.3,
-      enemy ? 0x5fffea : 0xc39f4b,
-      enemy ? 2.2 : 0.3,
+      warden ? 0x75c284 : enemy ? 0x5fffea : 0xc39f4b,
+      warden ? 1.25 : enemy ? 2.2 : 0.3,
     );
     const blade = material(
-      enemy ? 0x749da1 : 0xc3ceca,
-      0.83,
+      warden ? 0x8b9c66 : enemy ? 0x749da1 : 0xc3ceca,
+      warden ? 0.23 : 0.83,
       0.22,
       enemy ? 0x173a3a : 0,
       enemy ? 0.7 : 0,
     );
+    if (warden) this.rageMaterial = glow;
+    const bark = warden ? material(0x594b33, 0.03, 0.97) : leather;
+    const moss = warden ? material(0x648348, 0.02, 0.95) : cloth;
     const shadow = material(0x152427);
     const mesh = (
       geometry: THREE.BufferGeometry,
@@ -363,7 +398,7 @@ export class CharacterModel {
       ),
     );
     capeGeometry.computeVertexNormals();
-    const capeMat = material(npc ? 0x705140 : enemy ? 0x182b31 : 0x597b63);
+    const capeMat = material(warden ? 0x344d31 : npc ? 0x705140 : enemy ? 0x182b31 : 0x597b63);
     capeMat.side = THREE.DoubleSide;
     mesh(capeGeometry, capeMat, this.cape);
     sphere(0.04, trim, this.rig, -0.18, 1.44, -0.12);
@@ -424,14 +459,14 @@ export class CharacterModel {
       this.emissionLevels.set(swordMat, swordMat.emissiveIntensity);
       mesh(swordGeometry, swordMat, sword);
       sphere(0.045, trim, sword, 0, 0.065, 0);
-      if (!enemy || boss) {
+      if (!enemy || boss || warden) {
         const shield = new THREE.Group();
         this.shield = shield;
         shield.position.set(-0.05, -0.32, -0.09);
         this.leftArm.add(shield);
         const s = mesh(
           new THREE.CylinderGeometry(0.24, 0.24, 0.055, 8),
-          darkSteel,
+          warden ? bark : darkSteel,
           shield,
         );
         s.rotation.x = Math.PI / 2;
@@ -469,7 +504,38 @@ export class CharacterModel {
       staff.rotation.x = 0.05;
       sphere(0.07, trim, this.rightArm, 0, 0.35, -0.025);
     }
-    if (boss) this.rig.scale.setScalar(1.8);
+    if (warden) {
+      // Branches, moss and crystals are original geometry, batched under each joint.
+      const branch = (parent: THREE.Object3D, ax: number, ay: number, az: number, bx: number, by: number, bz: number, radius: number) => {
+        const direction = new THREE.Vector3(bx - ax, by - ay, bz - az);
+        const limb = mesh(new THREE.CylinderGeometry(radius * 0.48, radius, direction.length(), 5), bark, parent, (ax + bx) / 2, (ay + by) / 2, (az + bz) / 2);
+        limb.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.normalize());
+      };
+      for (const side of [-1, 1]) {
+        branch(this.head, side * 0.13, 0.23, 0.02, side * 0.31, 0.53, 0.035, 0.044);
+        branch(this.head, side * 0.31, 0.53, 0.035, side * 0.29, 0.68, 0, 0.029);
+        branch(this.head, side * 0.23, 0.4, 0.025, side * 0.43, 0.48, -0.015, 0.029);
+        branch(this.head, side * 0.29, 0.52, 0.03, side * 0.4, 0.63, 0.055, 0.025);
+      }
+      for (const arm of [this.leftArm, this.rightArm]) {
+        sphere(0.13, moss, arm, 0, 0.055, 0.02, 1.22, 0.43, 1.05);
+        const crystal = mesh(new THREE.OctahedronGeometry(0.07), glow, arm, 0.07, 0.09, -0.065);
+        crystal.scale.set(0.65, 1.5, 0.6);
+      }
+      for (const side of [-1, 1]) {
+        sphere(0.15, moss, this.rig, side * 0.17, 0.93, 0.07, 0.85, 0.45, 0.68);
+        const crystal = mesh(new THREE.OctahedronGeometry(0.075), glow, this.rig, side * 0.14, 1.27, -0.16);
+        crystal.scale.set(0.75, 1.65, 0.6);
+        crystal.rotation.z = side * -0.18;
+      }
+      if (this.sword) for (let i = 0; i < 4; i++) {
+        const side = i % 2 ? -1 : 1;
+        const thorn = mesh(new THREE.ConeGeometry(0.033, 0.14, 5), bark, this.sword, side * 0.07, -0.29 - i * 0.13, 0);
+        thorn.rotation.z = side * -Math.PI / 2;
+      }
+      if (this.shield) for (let i = -1; i <= 1; i++) tube(0.019, 0.023, 0.36, bark, this.shield, i * 0.105, 0, -0.053);
+    }
+    if (boss || warden) this.rig.scale.setScalar(warden ? 1.45 : 1.8);
     // Waist pivot lets the chest breathe and lean without sliding either foot.
     const upperParts = this.rig.children.filter(
       (part) => part !== this.leftLeg && part !== this.rightLeg,
@@ -649,6 +715,14 @@ export class CharacterModel {
     const dodge =
       !dead && external ? THREE.MathUtils.clamp(state.dodge, 0, 1) : 0;
     const combo = external ? Math.round(state.combo) % 3 : 0;
+    const combat = this.combatPose;
+    const combatPhase = this.hasCombatPose ? combat.phase : "idle";
+    const charging = combatPhase === "charging" && !dead && dodge === 0;
+    const charge = this.hasCombatPose ? THREE.MathUtils.clamp(combat.charge, 0, 1) : 0;
+    const guardBroken = this.hasCombatPose && combat.guardBroken;
+    const stagger = this.hasCombatPose && !dead ? THREE.MathUtils.clamp(combat.stagger + (guardBroken ? 0.65 : 0), 0, 1) : 0;
+    this.recoilTime = Math.max(0, this.recoilTime - dt);
+    const recoil = Math.sin(this.recoilTime / 0.24 * Math.PI) * this.recoilStrength * (dead ? 0 : 1);
     const smooth = (current: number, target: number, rate: number) =>
       THREE.MathUtils.lerp(current, target, 1 - Math.exp(-dt * rate));
     if (this.wasDead && !dead) {
@@ -658,10 +732,12 @@ export class CharacterModel {
       this.trailActive = false;
       this.airWeight = 0;
       this.landWeight = 0;
+      this.recoilTime = 0; this.recoilStrength = 0;
     }
     this.wasDead = dead;
     this.deathAmount = smooth(this.deathAmount, dead ? 1 : 0, 5.8);
     const aliveWeight = 1 - this.deathAmount;
+    this.rageAmount = smooth(this.rageAmount, this.enraged && !dead ? 1 : 0, 3);
     this.smoothSpeed = smooth(this.smoothSpeed, actualSpeed, 10);
     const run = THREE.MathUtils.smoothstep(this.smoothSpeed, 4.5, 7.9);
     this.movementWeight = smooth(
@@ -671,7 +747,7 @@ export class CharacterModel {
     );
     this.blockWeight = smooth(
       this.blockWeight,
-      blocking && !dead ? 1 : 0,
+      blocking && !dead && !guardBroken && stagger < 0.25 ? 1 : 0,
       blocking ? 24 : 13,
     );
     this.airWeight = smooth(this.airWeight, !grounded && !dead ? 1 : 0, 14);
@@ -741,14 +817,23 @@ export class CharacterModel {
     let leftX = 0.08 + stride * (0.28 + run * 0.12);
     let leftZ = 0.075;
     let twist = 0;
-    const attackProgress = THREE.MathUtils.clamp(attack, 0, 1);
-    const attacking = attackProgress > 0 && !dead && dodge === 0;
+    let attackProgress = THREE.MathUtils.clamp(attack, 0, 1);
+    if (this.hasCombatPose && combatPhase === "windup") attackProgress = Math.min(0.23, attackProgress);
+    if (this.hasCombatPose && combatPhase === "active") attackProgress = Math.max(0.25, Math.min(0.68, attackProgress));
+    if (this.hasCombatPose && combatPhase === "recovery") attackProgress = Math.max(0.68, attackProgress);
+    const attacking = attackProgress > 0 && !charging && !dead && dodge === 0 && stagger < 0.6;
     if (attacking) {
       const windup = THREE.MathUtils.smoothstep(attackProgress, 0, 0.24);
       const strike = THREE.MathUtils.smoothstep(attackProgress, 0.24, 0.61);
       const recovery = THREE.MathUtils.smoothstep(attackProgress, 0.72, 1);
       const direction = combo === 1 ? -1 : 1;
-      if (combo === 2) {
+      if (this.hasCombatPose && combat.counter) {
+        // Counter thrust points the blade forward instead of reusing the slash.
+        const extension = Math.sin(strike * Math.PI * 0.85) * (1 - recovery);
+        rightX = THREE.MathUtils.lerp(0.65, 1.62, windup) - recovery * 0.9;
+        rightZ = -0.13; rightY = -0.04;
+        twist = -0.12 + extension * 0.24;
+      } else if ((this.hasCombatPose && combat.heavy) || combo === 2) {
         rightX =
           THREE.MathUtils.lerp(2.62, 0.87, strike) * (1 - recovery * 0.75);
         rightZ = -0.18 + Math.sin(strike * Math.PI) * 0.24;
@@ -765,6 +850,22 @@ export class CharacterModel {
       leftX = 0.35;
       leftZ = 0.22;
     }
+    if (charging) {
+      const tremor = Math.sin(time * 19) * 0.007 * charge;
+      rightX = 2.35 + charge * 0.23 + tremor;
+      rightZ = -0.26; rightY = 0.1;
+      leftX = 0.58; leftZ = 0.13;
+      twist = -0.055 - charge * 0.055;
+    }
+    if (stagger > 0.05) {
+      rightX = THREE.MathUtils.lerp(rightX, 0.45, stagger);
+      rightZ = THREE.MathUtils.lerp(rightZ, -0.46, stagger);
+      leftX = THREE.MathUtils.lerp(leftX, 0.18, stagger);
+      leftZ = THREE.MathUtils.lerp(leftZ, 0.66, stagger);
+      twist -= stagger * 0.12;
+    }
+    const counterExtension = attacking && this.hasCombatPose && combat.counter ? Math.sin(THREE.MathUtils.smoothstep(attackProgress, 0.24, 0.61) * Math.PI * 0.85) * 0.18 : 0;
+    this.rightArm.position.z = smooth(this.rightArm.position.z, -counterExtension, 24);
     leftX = THREE.MathUtils.lerp(
       leftX,
       1.28 + this.hitTime * 0.45,
@@ -774,7 +875,7 @@ export class CharacterModel {
     rightX = THREE.MathUtils.lerp(rightX, 0.5, this.blockWeight);
     rightX += this.airWeight * 0.2 + rollWeight * 0.8;
     leftX += this.airWeight * 0.18 + rollWeight * 0.6;
-    const armRate = attacking ? 30 : 16;
+    const armRate = attacking ? 30 : charging ? 22 : 16;
     this.rightArm.rotation.x = smooth(
       this.rightArm.rotation.x,
       rightX * aliveWeight,
@@ -807,15 +908,16 @@ export class CharacterModel {
     }
 
     const breathing =
-      Math.sin(time * 2.1) * (1 - this.movementWeight * 0.7) * aliveWeight;
+      Math.sin(time * (2.1 + this.rageAmount * 0.35)) * (1 - this.movementWeight * 0.7) * aliveWeight;
     this.upperBody.scale.y = 1 + breathing * 0.007;
-    this.upperBody.scale.x = 1 + breathing * 0.003;
+    this.upperBody.scale.x = 1 + breathing * 0.003 + this.rageAmount * 0.015;
+    this.upperBody.position.z = smooth(this.upperBody.position.z, recoil * 0.065 + stagger * 0.035, 20);
     this.upperBody.rotation.x = smooth(
       this.upperBody.rotation.x,
       (-this.movementWeight * (0.035 + run * 0.08) -
         this.lean * 0.055 +
         this.blockWeight * 0.045 +
-        this.landWeight * 0.12) *
+        this.landWeight * 0.12 + recoil * 0.19 + stagger * 0.2 - (charging ? charge * 0.04 : 0)) *
         aliveWeight,
       12,
     );
@@ -831,7 +933,7 @@ export class CharacterModel {
     );
     this.head.rotation.y =
       this.kind === "npc" ? Math.sin(time * 0.4) * 0.12 : -this.bank * 0.06;
-    this.head.rotation.x = this.airWeight * -rising * 0.045;
+    this.head.rotation.x = this.airWeight * -rising * 0.045 - recoil * 0.08 + stagger * 0.14;
     this.cape.rotation.x = smooth(
       this.cape.rotation.x,
       0.025 +
@@ -853,7 +955,7 @@ export class CharacterModel {
       this.deathAmount * 0.16 +
       Math.abs(stride) * 0.018;
     this.rig.position.z = -0.78 * Math.sin(rollAngle) * aliveWeight;
-    const baseScale = this.kind === "guardian" ? 1.8 : 1;
+    const baseScale = this.kind === "guardian" ? 1.8 : this.kind === "warden" ? 1.45 : 1;
     this.rig.scale.set(
       baseScale,
       baseScale * (1 - rollWeight * 0.27),
@@ -863,14 +965,16 @@ export class CharacterModel {
     const flash = (this.hitTime / 0.17) * 0.24;
     for (const material of this.materials) {
       material.emissive.copy(this.bases.get(material)!);
-      const intensity = this.emissionLevels.get(material) ?? 0;
+      const enragedMaterial = material === this.rageMaterial;
+      if (enragedMaterial) material.emissive.lerp(this.rageColor, this.rageAmount * 0.7);
+      const intensity = (this.emissionLevels.get(material) ?? 0) + (enragedMaterial ? this.rageAmount * 1.2 : 0);
       material.emissiveIntensity =
         flash > 0 ? Math.max(1, intensity) : intensity;
       if (flash > 0) material.emissive.lerp(this.hitColor, flash);
     }
     this.updateTrail(
       dt,
-      attacking && attackProgress > 0.24 && attackProgress < 0.72,
+      attacking && combatPhase !== "windup" && attackProgress > 0.24 && attackProgress < 0.72,
     );
   }
 }

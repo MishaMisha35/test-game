@@ -10,6 +10,14 @@ import {
   JumpWindow,
 } from "./MovementMath";
 
+export type AttackPhase =
+  "idle" | "windup" | "active" | "recovery" | "charging";
+const LIGHT_TIMINGS = [
+  { duration: 0.48, windup: 0.15, active: 0.13 },
+  { duration: 0.5, windup: 0.17, active: 0.13 },
+  { duration: 0.58, windup: 0.23, active: 0.15 },
+] as const;
+
 export class PlayerController {
   model = new CharacterModel("hero");
   actor: ActorBody;
@@ -36,6 +44,15 @@ export class PlayerController {
   hitApplied = false;
   heavy = false;
   comboIndex = 0;
+  swingId = 0;
+  charging = false;
+  chargePower = 0;
+  counterAttack = false;
+  guardBrokenTime = 0;
+  private chargeElapsed = 0;
+  private counterTime = 0;
+  private attackWindup = 0.15;
+  private attackActive = 0.13;
   dodgeTime = 0;
   dodgeCooldown = 0;
   spellCooldown = 0;
@@ -98,6 +115,38 @@ export class PlayerController {
   }
   get attacking() {
     return this.attackTime > 0;
+  }
+  get attackPhase(): AttackPhase {
+    if (this.charging) return "charging";
+    if (!this.attacking) return "idle";
+    const elapsed = this.attackDuration - this.attackTime;
+    if (elapsed < this.attackWindup) return "windup";
+    if (elapsed < this.attackWindup + this.attackActive) return "active";
+    return "recovery";
+  }
+  get canHit(): boolean {
+    return this.alive && !this.hitApplied && this.attackPhase === "active";
+  }
+  get chargeRatio(): number {
+    return this.charging ? Math.min(1, this.chargeElapsed / 0.9) : 0;
+  }
+  get counterWindow(): number {
+    return this.counterTime;
+  }
+  openCounterWindow(): void {
+    if (this.alive && this.guardBrokenTime <= 0) this.counterTime = 0.85;
+  }
+  cancelCharge(): void {
+    this.charging = false;
+    this.chargeElapsed = 0;
+  }
+  breakGuard(duration = 0.7): void {
+    const remaining = this.guardBrokenTime;
+    this.resetActions();
+    this.guardBrokenTime = Math.max(
+      remaining,
+      Math.max(0.1, Math.min(2, Number.isFinite(duration) ? duration : 0.7)),
+    );
   }
   get dodgeInvulnerable() {
     return this.dodgeTime > 0 && this.dodgeAge >= 0.06 && this.dodgeAge <= 0.26;
@@ -181,20 +230,58 @@ export class PlayerController {
     this.spellCooldown = Math.max(0, this.spellCooldown - dt);
     this.invulnerable = Math.max(0, this.invulnerable - dt);
     this.parryTime = Math.max(0, this.parryTime - dt);
+    this.counterTime = Math.max(0, this.counterTime - dt);
+    this.guardBrokenTime = Math.max(0, this.guardBrokenTime - dt);
     const wasAttacking = this.attacking;
     this.attackTime = Math.max(0, this.attackTime - dt);
-    if (wasAttacking && !this.attacking) this.comboGrace = 0.3;
-    else this.comboGrace = Math.max(0, this.comboGrace - dt);
+    if (wasAttacking && !this.attacking) {
+      this.comboGrace = 0.3;
+      this.counterAttack = false;
+      this.chargePower = 0;
+    } else this.comboGrace = Math.max(0, this.comboGrace - dt);
     this.queueTime = Math.max(0, this.queueTime - dt);
     if (!this.alive) {
-      this.clearQueuedAttack();
+      this.resetActions();
       return;
     }
-    if (this.queueTime <= 0) this.queuedAttack = null;
+    const chargePressed = input.take("KeyT");
+    const chargeReleased = input.take("ChargeRelease");
+    if (
+      chargePressed &&
+      !this.attacking &&
+      this.attackCooldown <= 0 &&
+      this.dodgeTime <= 0 &&
+      this.guardBrokenTime <= 0 &&
+      this.stamina >= 32
+    ) {
+      this.charging = true;
+      this.chargeElapsed = 0;
+      this.chargePower = 0;
+      this.blocking = false;
+      this.parryTime = 0;
+      this.clearQueuedAttack();
+    }
+    if (this.charging && input.pressed.has("KeyQ")) this.cancelCharge();
+    if (this.charging) {
+      if (chargeReleased) this.releaseCharge();
+      else if (!input.down("KeyT") || this.guardBrokenTime > 0)
+        this.cancelCharge();
+      else {
+        this.chargeElapsed = Math.min(0.9, this.chargeElapsed + dt);
+        this.stamina = Math.max(0, this.stamina - 4 * dt);
+        if (this.stamina < 32) this.cancelCharge();
+        else if (this.chargeElapsed >= 0.9 - 1e-8) this.releaseCharge();
+      }
+    }
+    // A buffer that reaches zero on the exact recovery boundary is still valid.
+    if (this.queueTime <= 0 && this.attackCooldown > 1e-8)
+      this.queuedAttack = null;
     if (
       this.queuedAttack !== null &&
-      this.attackCooldown <= 0 &&
-      this.dodgeTime <= 0
+      this.attackCooldown <= 1e-8 &&
+      this.dodgeTime <= 0 &&
+      !this.charging &&
+      this.guardBrokenTime <= 0
     ) {
       const heavy = this.queuedAttack;
       this.clearQueuedAttack();
@@ -206,6 +293,8 @@ export class PlayerController {
       input.secondary &&
       this.stamina > 2 &&
       !this.attacking &&
+      !this.charging &&
+      this.guardBrokenTime <= 0 &&
       this.dodgeTime <= 0;
     this.guardTime = this.blocking ? this.guardTime + dt : 0;
     if (input.take("Block") && this.blocking) {
@@ -228,6 +317,8 @@ export class PlayerController {
       moving &&
       this.stamina > 4 &&
       !this.attacking &&
+      !this.charging &&
+      this.guardBrokenTime <= 0 &&
       !this.blocking &&
       !this.crouching;
     let speed = this.blocking
@@ -240,6 +331,8 @@ export class PlayerController {
             ? 2.2
             : 4.6;
     if (this.attacking) speed *= 0.45;
+    if (this.charging) speed *= 0.38;
+    if (this.guardBrokenTime > 0) speed *= 0.55;
     if (
       input.take("KeyQ") &&
       this.dodgeCooldown <= 0 &&
@@ -255,6 +348,7 @@ export class PlayerController {
       if (moving && !this.firstPerson) this.yaw = Math.atan2(-wx, -wz);
       this.blocking = false;
       this.parryTime = 0;
+      this.cancelCharge();
       this.clearQueuedAttack();
       onSound("dodge");
     }
@@ -298,7 +392,7 @@ export class PlayerController {
       this.velocity.z += dz * ratio;
       moveX = this.velocity.x * dt;
       moveZ = this.velocity.z * dt;
-      if (moving && !this.attacking && !this.firstPerson) {
+      if (moving && !this.attacking && !this.charging && !this.firstPerson) {
         const difference = angleDelta(this.yaw, Math.atan2(-wx, -wz));
         const change = Math.max(-18 * dt, Math.min(18 * dt, difference));
         this.yaw += change;
@@ -307,7 +401,12 @@ export class PlayerController {
     }
     if (this.desiredSprint && this.actualSpeed > 3 && this.dodgeTime <= 0)
       this.stamina = Math.max(0, this.stamina - dt * 12);
-    else if (!this.attacking && !this.blocking && this.dodgeTime <= 0)
+    else if (
+      !this.attacking &&
+      !this.charging &&
+      !this.blocking &&
+      this.dodgeTime <= 0
+    )
       this.stamina = Math.min(this.maxStamina, this.stamina + dt * 21);
     this.mana = Math.min(
       this.maxMana,
@@ -354,6 +453,14 @@ export class PlayerController {
     pose.combo = this.comboIndex;
     pose.speed = this.actualSpeed;
     this.model.setLocomotion(pose);
+    this.model.setCombatPose({
+      phase: this.attackPhase,
+      heavy: this.heavy,
+      charge: this.charging ? this.chargeRatio : this.chargePower,
+      counter: this.counterAttack,
+      stagger: this.guardBrokenTime > 0 ? 1 : 0,
+      guardBroken: this.guardBrokenTime > 0,
+    });
     this.model.update(
       dt,
       this.actualSpeed / 5,
@@ -364,11 +471,19 @@ export class PlayerController {
     );
   }
   attack(heavy: boolean): boolean {
-    if (!this.alive || this.dodgeTime > 0) return false;
+    if (
+      !this.alive ||
+      this.dodgeTime > 0 ||
+      this.charging ||
+      this.guardBrokenTime > 0
+    )
+      return false;
     if (this.attackCooldown <= 0) return this.startAttack(heavy);
+    // The whole remaining recovery must fit within the input buffer lifetime.
     if (
       this.attacking &&
-      this.attackTime <= 0.26 &&
+      this.attackTime <= 0.23 &&
+      this.attackCooldown <= 0.25 &&
       this.stamina >= (heavy ? 27 : 14)
     ) {
       this.queuedAttack = heavy;
@@ -376,22 +491,45 @@ export class PlayerController {
     }
     return false;
   }
-  private startAttack(heavy: boolean): boolean {
-    const cost = heavy ? 27 : 14;
-    if (this.stamina < cost || !this.alive) return false;
+  private releaseCharge(): void {
+    const elapsed = this.chargeElapsed;
+    this.cancelCharge();
+    if (
+      elapsed + 1e-8 >= 0.25 &&
+      this.alive &&
+      this.guardBrokenTime <= 0 &&
+      this.dodgeTime <= 0
+    )
+      this.startAttack(true, Math.min(1, elapsed / 0.9), true);
+  }
+  private startAttack(
+    heavy: boolean,
+    chargePower = 0,
+    charged = false,
+  ): boolean {
+    const cost = charged ? 32 : heavy ? 27 : 14;
+    if (this.stamina < cost || !this.alive || this.guardBrokenTime > 0)
+      return false;
     this.comboIndex =
       !heavy && !this.heavy && this.comboGrace > 0
         ? (this.comboIndex + 1) % 3
         : 0;
     this.heavy = heavy;
-    this.attackDuration = heavy ? 0.85 : [0.48, 0.5, 0.58][this.comboIndex];
+    this.chargePower = heavy ? Math.max(0, Math.min(1, chargePower)) : 0;
+    const timing = LIGHT_TIMINGS[this.comboIndex];
+    this.attackDuration = heavy ? 0.85 : timing.duration;
+    this.attackWindup = heavy ? (charged ? 0.26 : 0.36) : timing.windup;
+    this.attackActive = heavy ? 0.18 : timing.active;
     this.attackTime = this.attackDuration;
     this.attackCooldown = this.attackDuration + 0.02;
     this.hitApplied = false;
     this.stamina -= cost;
     this.blocking = false;
     this.parryTime = 0;
+    this.counterAttack = this.counterTime > 0;
+    this.counterTime = 0;
     this.comboGrace = 0;
+    this.swingId++;
     this.attackStarted = true;
     return true;
   }
@@ -418,6 +556,11 @@ export class PlayerController {
     this.guardTime = 0;
     this.attackStarted = false;
     this.comboGrace = 0;
+    this.cancelCharge();
+    this.chargePower = 0;
+    this.counterAttack = false;
+    this.counterTime = 0;
+    this.guardBrokenTime = 0;
     this.clearQueuedAttack();
     this.jump.reset();
     this.landingEvent = 0;

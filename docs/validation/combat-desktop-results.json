@@ -1,0 +1,38 @@
+{
+  "version": "2.1.0",
+  "highMetrics": {
+    "calls": 594,
+    "triangles": 190596,
+    "memory": {
+      "geometries": 333,
+      "textures": 16
+    },
+    "pixelRatio": 1,
+    "quality": "high"
+  },
+  "target": "development Electron",
+  "rendering": "SwiftShader; explicit High menu capture with adaptive resolution off, then shipped Low preset; not a hardware benchmark",
+  "menu": {
+    "phase": "menu",
+    "canvas": {
+      "width": 1440,
+      "height": 876
+    },
+    "objects": 261
+  },
+  "movement": {
+    "before": {
+      "x": -0.000014053676750336308,
+      "y": 0.5425958395004272,
+      "z": 17
+    },
+    "after": {
+      "x": -0.013846330344676971,
+      "y": 0.5411549568176269,
+      "z": 16.372936248779297
+    }
+  },
+  "fullscreen": true,
+  "saved": true,
+  "rendererErrors": []
+}

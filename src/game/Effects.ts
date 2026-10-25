@@ -8,6 +8,15 @@ interface Particle {
   color: THREE.Color;
   gravity: number;
 }
+export type StrikeKind = "light" | "heavy" | "critical" | "blocked" | "guardBreak";
+interface Ripple {
+  mesh: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
+  life: number;
+  duration: number;
+  start: number;
+  end: number;
+  opacity: number;
+}
 interface Label {
   sprite: THREE.Sprite;
   life: number;
@@ -31,6 +40,9 @@ export class Effects {
   private readonly sizes = new Float32Array(320);
   private readonly cloud: THREE.Points;
   private labels: Label[] = [];
+  private readonly ripples: Ripple[] = [];
+  private rippleCursor = 0;
+  private rippleLimit = 8;
   constructor(private scene: THREE.Scene) {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.BufferAttribute(this.positions, 3));
@@ -51,9 +63,25 @@ export class Effects {
     );
     this.cloud.frustumCulled = false;
     scene.add(this.cloud);
+    const rippleGeometry = new THREE.RingGeometry(0.88, 1, 36);
+    for (let i = 0; i < 8; i++) {
+      const mesh = new THREE.Mesh(rippleGeometry, new THREE.MeshBasicMaterial({ color: 0xe3c488, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, toneMapped: false }));
+      mesh.name = "pooled-impact-ripple";
+      mesh.visible = false;
+      mesh.frustumCulled = false;
+      mesh.renderOrder = 1;
+      mesh.onBeforeRender = (_renderer, _scene, camera) => {
+        mesh.quaternion.copy(camera.quaternion);
+        mesh.updateMatrixWorld();
+      };
+      scene.add(mesh);
+      this.ripples.push({ mesh, life: 0, duration: 1, start: 0.1, end: 1, opacity: 0.3 });
+    }
   }
   setBudget(count: number) {
     this.limit = Math.max(32, Math.min(this.capacity, count));
+    this.rippleLimit = this.limit < 80 ? 2 : this.limit < 160 ? 4 : 8;
+    for (let i = this.rippleLimit; i < this.ripples.length; i++) { this.ripples[i].life = 0; this.ripples[i].mesh.visible = false; }
     for (let i = this.limit; i < this.capacity; i++) this.particles[i].life = 0;
   }
   private emit(
@@ -90,6 +118,35 @@ export class Effects {
         4,
       );
     }
+  }
+  /** Real impacts reuse the fixed particle and eight-ripple pools; no hit-time meshes. */
+  strike(position: THREE.Vector3, kind: StrikeKind = "light") {
+    const blocked = kind === "blocked", broken = kind === "guardBreak";
+    const critical = kind === "critical", heavy = kind === "heavy";
+    const count = broken ? 34 : critical ? 28 : heavy ? 24 : blocked ? 16 : 10;
+    const color = broken ? 0xedba73 : critical ? 0xf0d18b : blocked ? 0xc9d9d9 : heavy ? 0xd5b58b : 0xb8ccb0;
+    const power = broken ? 2.7 : heavy || critical ? 2.25 : blocked ? 2.05 : 1.35;
+    for (let i = 0; i < Math.min(count, this.limit); i++) {
+      const angle = i * 2.3999632;
+      const spread = 0.55 + i % 4 * 0.18;
+      this.emit(position, color, blocked ? 0.1 : critical ? 0.15 : 0.13,
+        Math.cos(angle) * power * spread,
+        0.35 + (i % 5) * (blocked ? 0.22 : 0.32),
+        Math.sin(angle) * power * spread,
+        blocked ? 0.24 + i % 3 * 0.055 : 0.35 + i % 4 * 0.07,
+        blocked ? 6 : 4.5);
+    }
+    if (kind === "light") return;
+    const ripple = this.ripples[this.rippleCursor++ % this.rippleLimit];
+    ripple.life = ripple.duration = broken ? 0.44 : critical ? 0.35 : blocked ? 0.18 : 0.28;
+    ripple.start = blocked ? 0.08 : 0.12;
+    ripple.end = broken ? 1.45 : critical ? 0.9 : blocked ? 0.38 : 0.7;
+    ripple.opacity = broken ? 0.32 : blocked ? 0.2 : 0.25;
+    ripple.mesh.position.copy(position);
+    ripple.mesh.material.color.setHex(color);
+    ripple.mesh.material.opacity = ripple.opacity;
+    ripple.mesh.scale.setScalar(ripple.start);
+    ripple.mesh.visible = true;
   }
   dust(position: THREE.Vector3, intensity = 1) {
     for (let i = 0; i < Math.min(14, Math.ceil(intensity * 6)); i++) {
@@ -138,7 +195,7 @@ export class Effects {
     ctx.shadowColor = "#061917";
     ctx.shadowBlur = 5;
     ctx.fillStyle = color;
-    ctx.fillText(text, 128, 54);
+    ctx.fillText(text, 128, 54, 240);
     const sprite = new THREE.Sprite(
       new THREE.SpriteMaterial({
         map: new THREE.CanvasTexture(c),
@@ -157,6 +214,14 @@ export class Effects {
     l.sprite.material.dispose();
   }
   update(dt: number) {
+    for (const ripple of this.ripples) {
+      if (ripple.life <= 0) continue;
+      ripple.life = Math.max(0, ripple.life - dt);
+      const progress = 1 - ripple.life / ripple.duration;
+      ripple.mesh.scale.setScalar(THREE.MathUtils.lerp(ripple.start, ripple.end, 1 - (1 - progress) ** 2));
+      ripple.mesh.material.opacity = ripple.opacity * (1 - progress) ** 1.5;
+      ripple.mesh.visible = ripple.life > 0;
+    }
     for (let i = 0; i < this.capacity; i++) {
       const p = this.particles[i];
       p.life = Math.max(0, p.life - dt);

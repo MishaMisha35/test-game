@@ -92,3 +92,22 @@ export function damageAfterBlock(
     return { damage: amount * 0.2, staminaCost: cost, broken: false };
   return { damage: amount, staminaCost: available, broken: true };
 }
+
+export interface MeleeStrike { damage: number; critical: boolean; poise: number; knockback: number }
+/** Deterministic precision rewards, never random critical hits.
+ * Light damage: base*(1 + .08*combo). Heavy: base*(1 + .9*charge).
+ * A parry counter multiplies damage by 1.5. Third light and counters are critical.
+ * Poise and knockback are independent reactions, not additional health damage.
+ */
+export function resolveMeleeStrike(base: number, comboIndex: number, heavy: boolean, chargePower: number, counterAttack: boolean): MeleeStrike {
+  const amount = Number.isFinite(base) ? Math.max(0, Math.min(10_000, base)) : 0;
+  const combo = Number.isFinite(comboIndex) ? Math.max(0, Math.min(2, Math.floor(comboIndex))) : 0;
+  const charge = Number.isFinite(chargePower) ? Math.max(0, Math.min(1, chargePower)) : 0;
+  if (amount === 0) return { damage: 0, critical: false, poise: 0, knockback: 0 };
+  return {
+    damage: Math.round(amount * (heavy ? 1 + .9 * charge : 1 + .08 * combo) * (counterAttack ? 1.5 : 1)),
+    critical: counterAttack || (!heavy && combo === 2),
+    poise: Math.round((heavy ? 42 + 58 * charge : [16, 22, 34][combo]) * (counterAttack ? 1.35 : 1)),
+    knockback: (heavy ? 1.3 + 1.7 * charge : [.25, .4, .8][combo]) + (counterAttack ? .7 : 0),
+  };
+}

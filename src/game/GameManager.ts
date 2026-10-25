@@ -9,7 +9,12 @@ import { MagicSystem } from "./MagicSystem";
 import { Effects } from "./Effects";
 import { AudioManager } from "./AudioManager";
 import { SaveSystem, type SaveData } from "./SaveSystem";
-import { meleeHits, damageAfterBlock } from "./CombatSystem";
+import {
+  meleeHits,
+  damageAfterBlock,
+  resolveMeleeStrike,
+  type MeleeStrike,
+} from "./CombatSystem";
 import {
   SettingsSystem,
   AdaptiveResolution,
@@ -60,6 +65,10 @@ export class GameManager {
   readonly atmosphere: AtmosphereSystem;
   private hitStop = 0;
   private dustTimer = 0;
+  private lastSwingId = -1;
+  private struckEnemies = new Set<number>();
+  private chargeWasActive = false;
+  private introducedBosses = new Set<number>();
   name = "The Wayfarer";
   message = "";
   interaction = "";
@@ -159,6 +168,10 @@ export class GameManager {
     this.hotkeys();
     const running = this.phase === "playing" && this.panel === "none";
     this.input.active = running;
+    if (!running) {
+      this.player.cancelCharge();
+      this.chargeWasActive = false;
+    }
     if (running) {
       this.cameraController.readInput(dt, this.input);
       if (this.cameraController.firstPerson)
@@ -193,6 +206,17 @@ export class GameManager {
       );
       this.enemies.render(this.accumulator * 60, animationDt, this.time);
       this.magic.render(this.accumulator * 60);
+      if (this.player.charging && !this.chargeWasActive)
+        this.audio.play("charge");
+      this.chargeWasActive = this.player.charging;
+      const encounter = this.enemies.activeBoss(this.player.position);
+      if (encounter && !this.introducedBosses.has(encounter.id)) {
+        this.introducedBosses.add(encounter.id);
+        this.tell(
+          `${encounter.name} · ${encounter.miniBoss ? "Optional forest challenge" : "The ancient sanctuary"}`,
+        );
+        this.audio.play("boss");
+      }
       if (this.player.consumeAttackStarted()) {
         this.audio.play("swing");
         this.lastAttackAt = this.time;
@@ -243,6 +267,14 @@ export class GameManager {
           dodge: 0,
           combo: 0,
           speed: 0,
+        });
+        this.player.model.setCombatPose({
+          phase: "idle",
+          heavy: false,
+          charge: 0,
+          counter: false,
+          stagger: 0,
+          guardBroken: false,
         });
         this.player.model.update(dt, 0, 0, false, false, this.time);
       }
@@ -385,41 +417,42 @@ export class GameManager {
     if (!this.player.alive) return;
     this.magic.update(dt, this.enemies, this.player, (e, d) => this.hit(e, d));
     const p = this.player;
-    if (
-      p.attacking &&
-      !p.hitApplied &&
-      p.attackTime < p.attackDuration * 0.52
-    ) {
-      p.hitApplied = true;
-      for (const e of this.enemies.enemies)
+    if (p.swingId !== this.lastSwingId) {
+      this.lastSwingId = p.swingId;
+      this.struckEnemies.clear();
+    }
+    if (p.alive && p.attackPhase === "active") {
+      const strike = resolveMeleeStrike(
+        (p.heavy ? 48 : 29) + p.upgrades.warrior * 5 + (p.level - 1) * 2,
+        p.comboIndex,
+        p.heavy,
+        p.chargePower,
+        p.counterAttack,
+      );
+      for (const e of this.enemies.enemies) {
         if (
-          e.health > 0 &&
-          meleeHits(
+          e.health <= 0 ||
+          this.struckEnemies.has(e.id) ||
+          !meleeHits(
             { ...p.hitbox, radius: 0.9 },
             p.yaw,
             e.hitbox,
             p.heavy ? 2.7 : 2.3,
             Math.PI * 0.38,
-          ) &&
-          this.physics.lineClear(p.hitbox, e.hitbox)
-        ) {
-          if (e.state === "dormant") {
-            this.tell(
-              "Four shadow wards bind the Guardian. Defeat the wraiths first.",
-            );
-            continue;
-          }
-          this.hit(
-            e,
-            Math.round(
-              ((p.heavy ? 48 : 29) +
-                p.upgrades.warrior * 5 +
-                (p.level - 1) * 2) *
-                (p.heavy ? 1 : 1 + p.comboIndex * 0.08),
-            ),
-            true,
+          ) ||
+          !this.physics.lineClear(p.hitbox, e.hitbox)
+        )
+          continue;
+        this.struckEnemies.add(e.id);
+        if (e.state === "dormant") {
+          this.tell(
+            "Four shadow wards bind the Guardian. Defeat the wraiths first.",
           );
+          continue;
         }
+        p.hitApplied = true;
+        this.hit(e, strike.damage, true, strike);
+      }
     }
     if (!this.enemies.inCombat && this.time - this.lastAttackAt > 6)
       p.health = Math.min(p.maxHealth, p.health + dt * 2.2);
@@ -435,59 +468,123 @@ export class GameManager {
       p.resetInterpolation();
     }
   }
-  private hit(enemy: Enemy, amount: number, melee = false) {
+  private hit(
+    enemy: Enemy,
+    amount: number,
+    melee = false,
+    strike?: MeleeStrike,
+  ) {
     if (!this.player.alive || enemy.health <= 0 || enemy.state === "dormant")
       return;
-    const killed = this.enemies.damage(enemy, amount);
+    const oldHealth = enemy.health;
+    const outcome =
+      melee && strike
+        ? this.enemies.receiveStrike(enemy, amount, {
+            poise: strike.poise,
+            knockback: strike.knockback,
+            origin: this.player.position,
+            guardBreak:
+              this.player.counterAttack || this.player.chargePower > 0.7,
+            unblockable: this.player.counterAttack,
+          })
+        : {
+            killed: this.enemies.damage(enemy, amount),
+            blocked: false,
+            guardBroken: false,
+            damage: Math.min(oldHealth, amount),
+            staggered: false,
+          };
+    const critical = !!strike?.critical && !outcome.blocked;
+    const effect = outcome.guardBroken
+      ? "guardBreak"
+      : outcome.blocked
+        ? "blocked"
+        : critical
+          ? "critical"
+          : this.player.heavy && melee
+            ? "heavy"
+            : "light";
     this.hitStop = Math.max(
       this.hitStop,
-      melee ? (this.player.heavy ? 0.045 : 0.028) : 0.012,
+      outcome.blocked
+        ? 0.018
+        : critical
+          ? 0.05
+          : melee
+            ? this.player.heavy
+              ? 0.045
+              : 0.028
+            : 0.012,
     );
     this.cameraController.shake(
-      melee ? (this.player.heavy ? 0.55 : 0.32) : 0.22,
+      outcome.blocked
+        ? 0.18
+        : critical
+          ? 0.6
+          : melee
+            ? this.player.heavy
+              ? 0.55
+              : 0.32
+            : 0.22,
     );
-    if (melee && this.player.heavy && !enemy.boss && !killed) {
-      enemy.state = "stunned";
-      enemy.timer = 0.35;
-      enemy.ring.visible = false;
-    }
-    this.audio.play("hit");
-    this.effects.burst(
+    this.audio.play(
+      outcome.guardBroken ? "guardBreak" : critical ? "critical" : "hit",
+    );
+    this.effects.strike(
       enemy.position.clone().add(new THREE.Vector3(0, 1.2, 0)),
-      0x9bd8c2,
-      12,
+      effect,
     );
+    if (!outcome.blocked) enemy.model.reactToHit(outcome.staggered ? 1 : 0.45);
+    const label = outcome.guardBroken
+      ? `GUARD BREAK ${outcome.damage}`
+      : outcome.blocked
+        ? "BLOCK"
+        : melee && this.player.counterAttack
+          ? `RIPOSTE ${outcome.damage}`
+          : critical
+            ? `CRITICAL ${outcome.damage}`
+            : String(outcome.damage);
     this.effects.damage(
       enemy.position.clone().add(new THREE.Vector3(0, 2.2, 0)),
-      String(amount),
+      label,
+      critical ? "#ffe3a0" : outcome.blocked ? "#a7c4c5" : "#edd4a0",
     );
-    if (killed) {
-      this.player.gold += enemy.boss ? 120 : 15;
-      const level = this.player.gainXP(enemy.boss ? 150 : 35);
-      if (level) {
-        this.audio.play("level");
-        this.tell(`Level ${this.player.level} · Your strength awakens.`);
-      } else
-        this.tell(
-          enemy.boss
-            ? "The ancient ward has fallen."
-            : `Shadow banished · +35 XP · +15 gold (${this.enemies.kills}/4)`,
-        );
-      if (this.enemies.kills === 4 && !enemy.boss)
-        this.tell(
-          "The last ward fades. The Fallen Guardian awaits in the northern ruins.",
-        );
-      if (enemy.boss) {
-        this.questAccepted = true;
-        this.questComplete = true;
-        this.phase = "victory";
-        this.panel = "none";
-        this.input.reset();
-        document.exitPointerLock?.();
-        this.audio.play("victory");
-        this.save(false);
-      } else this.save(false);
+    if (!outcome.killed) return;
+    const gold = enemy.miniBoss ? 80 : enemy.boss ? 120 : 15;
+    const xp = enemy.miniBoss ? 100 : enemy.boss ? 150 : 35;
+    this.player.gold += gold;
+    if (enemy.miniBoss) this.player.potions++;
+    const level = this.player.gainXP(xp);
+    if (level) this.audio.play("level");
+    if (enemy.miniBoss) {
+      this.audio.play("victory");
+      this.tell(
+        `Thornbound Warden defeated · +80 gold · +100 XP · +1 healing draught${level ? ` · Level ${this.player.level}` : ""}`,
+      );
+      this.save(false);
+      return;
     }
+    if (level) this.tell(`Level ${this.player.level} · Your strength awakens.`);
+    else
+      this.tell(
+        enemy.boss
+          ? "The ancient ward has fallen."
+          : `Shadow banished · +35 XP · +15 gold (${this.enemies.kills}/4)`,
+      );
+    if (this.enemies.kills === 4 && !enemy.boss)
+      this.tell(
+        "The last ward fades. The Fallen Guardian awaits in the northern ruins.",
+      );
+    if (enemy.boss) {
+      this.questAccepted = true;
+      this.questComplete = true;
+      this.phase = "victory";
+      this.panel = "none";
+      this.input.reset();
+      document.exitPointerLock?.();
+      this.audio.play("victory");
+    }
+    this.save(false);
   }
   private hurt(amount: number, enemy: Enemy) {
     const p = this.player;
@@ -503,6 +600,7 @@ export class GameManager {
       );
     if (canBlock && p.parryTime > 0 && enemy.attackType !== "slam") {
       p.parryTime = 0;
+      p.openCounterWindow();
       enemy.state = "stunned";
       enemy.timer = enemy.boss ? 0.55 : 1;
       enemy.ring.visible = false;
@@ -526,6 +624,7 @@ export class GameManager {
     p.health = Math.max(0, p.health - block.damage);
     p.invulnerable = 0.6;
     p.model.flash();
+    p.model.reactToHit(canBlock ? 0.25 : 0.7);
     this.audio.play("hurt");
     this.lastAttackAt = this.time;
     this.effects.damage(
@@ -533,7 +632,11 @@ export class GameManager {
       canBlock && !block.broken ? "BLOCK" : `−${Math.round(block.damage)}`,
       canBlock ? "#d8c59d" : "#ed9e8f",
     );
-    if (block.broken) this.tell("Guard broken!");
+    if (block.broken) {
+      p.breakGuard(0.7);
+      this.audio.play("guardBreak");
+      this.tell("Guard broken! Recover before raising the shield.");
+    }
     if (!p.alive) {
       this.phase = "dead";
       this.panel = "none";
@@ -772,6 +875,10 @@ export class GameManager {
   }
   private resetWorld() {
     this.hitStop = 0;
+    this.chargeWasActive = false;
+    this.lastSwingId = -1;
+    this.struckEnemies.clear();
+    this.introducedBosses.clear();
     this.enemies.reset();
     this.magic.clear();
     this.world.resetInteractables();
@@ -788,21 +895,7 @@ export class GameManager {
     this.player.sync();
     this.player.resetInterpolation();
     this.hitStop = 0;
-    for (const e of this.enemies.enemies)
-      if (e.health > 0) {
-        e.health = e.maxHealth;
-        e.phase = 1;
-        e.state = e.boss ? "dormant" : "patrol";
-        e.position.copy(e.home);
-        e.previousPosition.copy(e.home);
-        e.motion = 0;
-        e.animation = 0;
-        e.timer = 0;
-        e.ring.visible = false;
-        e.healthBar.visible = false;
-        if (e.actor)
-          this.physics.teleport(e.actor, e.home.x, e.home.y, e.home.z);
-      }
+    this.enemies.resetSurvivors();
     this.enemies.sync();
     this.enemies.freezeInterpolation();
     this.magic.clear();
@@ -819,7 +912,7 @@ export class GameManager {
     }
     const p = this.player;
     const data: SaveData = {
-      version: 1,
+      version: 2,
       name: this.name,
       position: { x: p.position.x, y: p.position.y, z: p.position.z },
       health: p.health,
@@ -840,6 +933,7 @@ export class GameManager {
         .map((i) => i.id),
       upgrades: { ...p.upgrades },
       bossDefeated: this.enemies.boss.health <= 0,
+      miniBossDefeated: this.enemies.miniBoss.health <= 0,
     };
     const ok = this.saves.save(data);
     if (feedback)
@@ -937,7 +1031,7 @@ export class GameManager {
   }
   hud(): HudState {
     const p = this.player,
-      boss = this.enemies.boss;
+      boss = this.enemies.activeBoss(p.position) ?? this.enemies.boss;
     return {
       phase: this.phase,
       panel: this.panel,
@@ -957,7 +1051,7 @@ export class GameManager {
       totalEnemies: 4,
       questAccepted: this.questAccepted,
       questComplete: this.questComplete,
-      bossAwake: boss.state !== "dormant" && boss.health > 0,
+      bossAwake: !!this.enemies.activeBoss(p.position),
       bossHealth: boss.health,
       bossMaxHealth: boss.maxHealth,
       position: { x: p.position.x, z: p.position.z },
@@ -984,12 +1078,21 @@ export class GameManager {
       timeOfDay: this.atmosphere.hour,
       combo: p.attacking && !p.heavy ? p.comboIndex + 1 : 0,
       parryReady: p.parryTime > 0,
+      attackPhase: p.attackPhase,
+      charge: p.chargeRatio,
+      counterReady: p.counterWindow > 0,
+      guardBroken: p.guardBrokenTime > 0,
+      miniBossDefeated: this.enemies.miniBoss.health <= 0,
+      bossName: boss.name,
+      bossPhase: boss.phase,
+      bossIsMini: boss.miniBoss,
       hasSave: this.saves.hasSave(),
       enemies: this.enemies.enemies.map((e) => ({
         x: e.position.x,
         z: e.position.z,
         boss: e.boss,
         alive: e.health > 0,
+        miniBoss: e.miniBoss,
       })),
       objective: !this.questAccepted
         ? { x: 5, z: 15 }

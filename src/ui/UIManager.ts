@@ -65,14 +65,15 @@ export class UIManager {
   <header class="topbar"><div class="brand" aria-label="Eternal Realms"><span class="brand-mark">E</span><span>ETERNAL REALMS<small>SHADOW OF THE ANCIENTS</small></span></div><nav class="top-actions">${button("help", "Field guide", "quiet", "book")}${button("settings", "Settings", "icon-button", "settings")}${button("sound", "Sound", "icon-button sound-button", "sound")}</nav></header>
   <section class="menu-content" id="menu-content"><p class="eyebrow"><span></span> A NEW CHAPTER AWAITS</p><h1>A forgotten world.<br><em>An unwritten<br class="wide-break"> legend.</em></h1><p class="menu-lore">Beyond the veil of an ancient forest, something stirs.<br>Take up your blade. Follow the light. Find your own way.</p><div class="menu-buttons">${button("start", "Begin your journey", "primary", "arrow")}${button("continue", "Continue journey", "secondary", "save")}</div><div class="menu-note"><i></i> CHAPTER I <span>THE WHISPERING VEIL</span></div></section>
   <aside class="vista-label" id="vista-label"><span class="tiny">THE BORDERLANDS</span><h3>The Whispering Veil</h3><p>Where the old world still remembers.</p><span class="vista-line"></span><small>38° 24′ N &nbsp; · &nbsp; 12° 08′ E</small></aside>
-  <footer class="menu-footer" id="menu-footer"><span>AN ADVENTURE BEGINS WITH A SINGLE STEP.</span><span>v0.2 <i>✦</i> ULTRA SMOOTH</span></footer>
+  <footer class="menu-footer" id="menu-footer"><span>AN ADVENTURE BEGINS WITH A SINGLE STEP.</span><span>v2.1 <i>✦</i> COMBAT EVOLUTION</span></footer>
   <div id="hud" class="hidden"><div class="player-name"><span class="avatar">${icon("shield")}</span><span><small>THE WAYFARER</small><b id="hero-name">Wanderer</b></span><span class="level">LV <b id="level">1</b></span></div>
   <div class="compass"><div class="compass-rule"></div><span id="compass-heading">N</span><b>◆</b><small id="location">The Whispering Veil</small></div>
   <aside class="quest-card"><p class="tiny">THE ANCIENTS' CALL</p><div class="quest-title"><span class="quest-diamond">◇</span><h3 id="quest-title">A light in the darkness</h3></div><p id="quest-detail">Speak to the keeper by the village.</p><button type="button" data-action="journal" class="text-link">View journal <kbd>J</kbd></button></aside>
-  <div class="boss-bar hidden" id="boss-bar"><small>THE FALLEN GUARDIAN</small><div><i id="boss-fill"></i></div><span id="boss-health"></span></div>
+  <div class="boss-bar hidden" id="boss-bar"><small id="boss-name">THE FALLEN GUARDIAN</small><span id="boss-phase" class="boss-phase"></span><div><i id="boss-fill"></i></div><span id="boss-health"></span></div>
   <div class="vitals"><div class="vitals-heading"><span id="health-label">100 / 100</span><small>VITALITY</small></div><div class="bar health"><i id="health-fill"></i></div><div class="resource"><span>${icon("spark")}</span><div class="bar mana"><i id="mana-fill"></i></div><small id="mana-label"></small></div><div class="resource"><span>${icon("dodge")}</span><div class="bar stamina"><i id="stamina-fill"></i></div><small id="stamina-label"></small></div><div class="xp-line"><span id="xp-label">0 / 100 XP</span><i><b id="xp-fill"></b></i></div></div>
   <div class="hotbar"><div class="slot" id="magic-slot"><div>${icon("flame")}<kbd>F</kbd><span id="spell-cooldown"></span></div><small>Cast spell</small></div><div class="slot" id="dodge-slot"><div>${icon("dodge")}<kbd>Q</kbd><span id="dodge-cooldown"></span></div><small>Evade</small></div><button class="slot" data-action="heal" id="heal-slot"><div>${icon("potion")}<kbd>H</kbd><b id="potion-count">3</b></div><small>Restore</small></button><span class="hotbar-divider"></span><button class="small-slot" data-action="inventory" aria-label="Inventory">${icon("bag")}<kbd>I</kbd></button><button class="small-slot" data-action="map" aria-label="Map">${icon("map")}<kbd>M</kbd></button><button class="small-slot" data-action="skills" aria-label="Skills">${icon("spark")}<kbd>K</kbd></button></div>
   <div id="combat-cue" class="combat-cue hidden" aria-hidden="true"></div>
+  <div id="attack-readout" class="attack-readout hidden" aria-hidden="true"><span id="attack-phase"></span><div><i id="attack-fill"></i></div></div>
   <div class="interact hidden" id="interact"><kbd>E</kbd><span id="interaction-label"></span></div>
   <div class="minimap-shell"><div class="minimap-heading"><span id="map-time">17:30</span><button data-action="map" aria-label="Open world map">${icon("map")}</button></div><svg id="minimap" viewBox="0 0 180 180" aria-label="Minimap"></svg><div class="minimap-footer"><span id="region-name">BORDERLANDS</span><b>N ↑</b></div></div>
   <div class="game-hints"><span><kbd>W A S D</kbd> Move</span><span><kbd>Mouse</kbd> Look</span><span><kbd>LMB</kbd> Attack</span><span><kbd>Esc</kbd> Pause</span></div></div>
@@ -253,17 +254,28 @@ export class UIManager {
       "--cooldown-angle",
       `${Math.min(1, Math.max(0, state.dodgeCooldown / 1.1)) * 360}deg`,
     );
-    const combatCue = state.parryReady
-      ? "GUARD · PERFECT WINDOW"
-      : state.combo > 0
-        ? `CHAIN ×${state.combo}`
-        : "";
+    const combatCue = state.guardBroken
+      ? "GUARD BROKEN"
+      : state.counterReady
+        ? "Riposte ready"
+        : state.parryReady
+          ? "GUARD · PERFECT WINDOW"
+          : state.combo > 0
+            ? `CHAIN ×${state.combo}`
+            : "";
+    const inPlay = state.phase === "playing" && state.panel === "none";
     this.set("combat-cue", combatCue);
-    this.get("combat-cue").classList.toggle(
-      "hidden",
-      !combatCue || state.phase !== "playing" || state.panel !== "none",
-    );
-    this.get("combat-cue").classList.toggle("guard-ready", state.parryReady);
+    this.get("combat-cue").classList.toggle("hidden", !combatCue || !inPlay);
+    this.get("combat-cue").classList.toggle("guard-ready", state.parryReady || state.counterReady);
+    this.get("combat-cue").classList.toggle("guard-broken", state.guardBroken);
+    const phase = (state.attackPhase || "idle").toLowerCase();
+    const charging = phase === "charging" || phase === "charge";
+    const showAttack = inPlay && phase !== "idle" && phase !== "none";
+    const label = charging ? `CHARGING · ${Math.round(Math.min(1,Math.max(0,state.charge))*100)}%` : phase === "active" ? "STRIKE" : phase === "recovery" ? "RECOVERING" : phase === "windup" || phase === "startup" ? "WINDUP" : phase.toUpperCase();
+    this.get("attack-readout").classList.toggle("hidden", !showAttack);
+    this.get("attack-readout").dataset.phase = charging ? "charging" : phase;
+    this.set("attack-phase",label);
+    this.fill("attack-fill",charging ? state.charge : 1,1);
     this.get("dodge-slot").classList.toggle("cooling", state.dodgeCooldown > 0);
     this.set("location", state.location);
     this.set("map-time", state.time);
@@ -292,6 +304,9 @@ export class UIManager {
       "hidden",
       !state.bossAwake || state.bossHealth <= 0,
     );
+    this.set("boss-name", (state.bossName || "The Fallen Guardian").toUpperCase());
+    this.set("boss-phase", `${state.bossIsMini ? "OPTIONAL ENCOUNTER" : "ANCIENT GUARDIAN"}${state.bossPhase > 1 ? " · PHASE II" : ""}`);
+    this.get("boss-bar").classList.toggle("mini-boss",state.bossIsMini);
     this.fill("boss-fill", state.bossHealth, state.bossMaxHealth);
     this.set(
       "boss-health",
@@ -315,6 +330,7 @@ export class UIManager {
             state.kills,
             state.questAccepted,
             state.questComplete,
+            state.miniBossDefeated,
             state.muted,
             state.quality,
             state.hasSave,
@@ -359,6 +375,7 @@ export class UIManager {
       .filter((e) => e.alive)
       .map((e) => {
         const [x, y] = xy(e.x, e.z);
+        if(e.miniBoss) return `<path d="m${x} ${y-3} 3 3-3 3-3-3Z" fill="#abc58b" stroke="#e1d6a0" stroke-width=".6"/>`;
         return `<circle cx="${x}" cy="${y}" r="${e.boss ? 3 : 1.9}" fill="${e.boss ? "#d7b66c" : "#d87d6d"}"/>`;
       })
       .join(
@@ -403,11 +420,11 @@ export class UIManager {
       }[s.panel as Exclude<typeof s.panel, "none">] || "";
     let body = "";
     if (s.panel === "inventory")
-      body = `<div class="inventory-heading"><span>WAYFARER’S PACK</span><span>${icon("coin")} ${s.gold} gold</span></div><div class="inventory-grid"><article class="item equipped"><div class="item-art">${icon("sword")}</div><small>EQUIPPED · MAIN HAND</small><h3>Wayfarer’s blade</h3><p>A faithful steel longsword.<br>LMB · Shift + LMB for a heavy strike.</p><span class="item-tag">COMMON · SWORD</span></article><article class="item"><div class="item-art potion-art">${icon("potion")}<b>×${s.potions}</b></div><small>CONSUMABLE</small><h3>Crimson draught</h3><p>A little warmth for the road.<br>Restores health when wounded.</p>${button("heal", "Drink potion", "secondary", "potion", s.potions <= 0 || s.health >= s.maxHealth)}</article></div><div class="inventory-stats"><span>Level <b>${s.level}</b></span><span>Maximum health <b>${s.maxHealth}</b></span><span>Maximum mana <b>${s.maxMana}</b></span><span>Maximum stamina <b>${s.maxStamina}</b></span></div><p class="panel-note">Find chests among the ruins and defeat corrupted sentinels to gather provisions and gold.</p>`;
+      body = `<div class="inventory-heading"><span>WAYFARER’S PACK</span><span>${icon("coin")} ${s.gold} gold</span></div><div class="inventory-grid"><article class="item equipped"><div class="item-art">${icon("sword")}</div><small>EQUIPPED · MAIN HAND</small><h3>Wayfarer’s blade</h3><p>A faithful steel longsword.<br>LMB combos · Shift + LMB heavy · Hold T to charge.</p><span class="item-tag">COMMON · SWORD</span></article><article class="item"><div class="item-art potion-art">${icon("potion")}<b>×${s.potions}</b></div><small>CONSUMABLE</small><h3>Crimson draught</h3><p>A little warmth for the road.<br>Restores health when wounded.</p>${button("heal", "Drink potion", "secondary", "potion", s.potions <= 0 || s.health >= s.maxHealth)}</article></div><div class="inventory-stats"><span>Level <b>${s.level}</b></span><span>Maximum health <b>${s.maxHealth}</b></span><span>Maximum mana <b>${s.maxMana}</b></span><span>Maximum stamina <b>${s.maxStamina}</b></span></div><p class="panel-note">Find chests among the ruins and defeat corrupted sentinels to gather provisions and gold.</p>`;
     if (s.panel === "journal")
-      body = `<div class="journal-layout"><div class="journal-sidebar"><span class="tiny">MAIN JOURNEY</span><div class="journal-active">${icon("spark")} The ancients’ call</div><small>CHAPTER I</small></div><article class="journal-body"><span class="status-badge">${s.questComplete ? "COMPLETE" : s.questAccepted ? "IN PROGRESS" : "UNDISCOVERED"}</span><h3>The ancients’ call</h3><p>The forest is restless. Corrupted sentinels stalk the old road, and a forgotten guardian watches over the northern sanctum. The keeper of Elderwood may know how to break the curse.</p><ul class="objectives"><li class="${s.questAccepted ? "complete" : ""}"><span>${s.questAccepted ? "✓" : "◇"}</span> Speak to the village keeper</li><li class="${s.kills >= s.totalEnemies ? "complete" : ""}"><span>${s.kills >= s.totalEnemies ? "✓" : "◇"}</span> Defeat the corrupted sentinels <b>${s.kills} / ${s.totalEnemies}</b></li><li class="${s.questComplete ? "complete" : ""}"><span>${s.questComplete ? "✓" : "◇"}</span> Defeat the Fallen Guardian</li></ul><div class="journal-reward"><small>THE REWARD</small><p>A quieter forest. A name the borderlands will remember.</p></div></article></div>`;
+      body = `<div class="journal-layout"><div class="journal-sidebar"><span class="tiny">MAIN JOURNEY</span><div class="journal-active">${icon("spark")} The ancients’ call</div><small>CHAPTER I</small></div><article class="journal-body"><span class="status-badge">${s.questComplete ? "COMPLETE" : s.questAccepted ? "IN PROGRESS" : "UNDISCOVERED"}</span><h3>The ancients’ call</h3><p>The forest is restless. Corrupted sentinels stalk the old road, and a forgotten guardian watches over the northern sanctum. The keeper of Elderwood may know how to break the curse.</p><ul class="objectives"><li class="${s.questAccepted ? "complete" : ""}"><span>${s.questAccepted ? "✓" : "◇"}</span> Speak to the village keeper</li><li class="${s.kills >= s.totalEnemies ? "complete" : ""}"><span>${s.kills >= s.totalEnemies ? "✓" : "◇"}</span> Defeat the corrupted sentinels <b>${s.kills} / ${s.totalEnemies}</b></li><li class="${s.questComplete ? "complete" : ""}"><span>${s.questComplete ? "✓" : "◇"}</span> Defeat the Fallen Guardian</li></ul><section class="optional-encounter ${s.miniBossDefeated ? "complete" : ""}"><span class="status-badge">${s.miniBossDefeated ? "DEFEATED" : "OPTIONAL"}</span><h4>Thornbound Warden</h4><p>A restless protector waits in the forest clearing. This encounter is independent of the ancient wards.</p><div class="optional-reward">80 gold <span>·</span> 100 XP <span>·</span> 1 health potion</div></section><div class="journal-reward"><small>THE REWARD</small><p>A quieter forest. A name the borderlands will remember.</p></div></article></div>`;
     if (s.panel === "map")
-      body = `<div class="world-map-wrap"><svg id="world-map" viewBox="0 0 180 180" aria-label="World map">${this.map(s, true)}</svg><span class="map-north">N<br>↑</span></div><div class="map-legend"><span><i class="player-dot"></i>You</span><span><i class="enemy-dot"></i>Sentinel</span><span><i class="objective-dot"></i>Journey objective</span><span>${s.position.x.toFixed(0)}, ${s.position.z.toFixed(0)}</span></div>`;
+      body = `<div class="world-map-wrap"><svg id="world-map" viewBox="0 0 180 180" aria-label="World map">${this.map(s, true)}</svg><span class="map-north">N<br>↑</span></div><div class="map-legend"><span><i class="player-dot"></i>You</span><span><i class="enemy-dot"></i>Sentinel</span><span><i class="warden-dot"></i>Warden</span><span><i class="objective-dot"></i>Journey objective</span><span>${s.position.x.toFixed(0)}, ${s.position.z.toFixed(0)}</span></div>`;
     if (s.panel === "skills")
       body = `<p class="panel-description">Choose the path that calls to you. Each training costs <b>40 gold</b> and permanently strengthens your hero.</p><div class="skills-grid">${[
         [
@@ -441,7 +458,7 @@ export class UIManager {
       <div class="settings-row"><div><h3>Camera effects</h3><p>Strength of camera motion and impact feedback. Zero turns them off.</p></div><label class="range-label"><input aria-label="Camera effects intensity" type="range" min="0" max="1" step="0.05" value="${s.cameraEffects}" data-action="cameraEffects"><output data-value="cameraEffects">${Math.round(s.cameraEffects * 100)}%</output></label></div>
       <div class="settings-row"><div><h3>Motion blur</h3><p>Optional camera-motion softening. Off gives the clearest view.</p></div>${button("motionBlur", s.motionBlur ? "On" : "Off", "secondary setting-toggle")}</div>
       <div class="settings-row"><div><h3>Adaptive resolution</h3><p>Automatically adjust rendering resolution to keep motion smooth.</p></div>${button("adaptiveQuality", s.adaptiveQuality ? "On" : "Off", "secondary setting-toggle")}</div>
-      <p class="panel-note">Settings are remembered between journeys.<br>Eternal Realms · v0.2 Ultra Smooth · All art and sound generated locally.</p>`;
+      <p class="panel-note">Settings are remembered between journeys.<br>Eternal Realms · v2.1 Combat Evolution · All art and sound generated locally.</p>`;
     if (s.panel === "help")
       body = `<p class="panel-description">Follow the old road north. Speak to the keeper, defeat the corrupted sentinels, and discover what waits in the ancient sanctum.</p><div class="control-columns"><div><h3>Explore</h3>${[
         ["W A S D", "Move"],
@@ -459,7 +476,9 @@ export class UIManager {
         .join("")}</div><div><h3>Stand your ground</h3>${[
         ["Left mouse", "Chain light attacks"],
         ["Shift + LMB", "Heavy attack"],
+        ["Hold T · release", "Charge a powerful strike"],
         ["Right mouse", "Block · initial press parries"],
+        ["LMB after parry", "Riposte while ready"],
         ["Q", "Evade"],
         ["F", "Cast selected spell"],
         ["1 / 2", "Ready ember / frost"],

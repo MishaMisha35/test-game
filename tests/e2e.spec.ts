@@ -55,9 +55,11 @@ async function placeEnemy(page: Page, index: number, x: number, z: number) {
 async function softwareQuality(page: Page) {
   await page.evaluate(() => {
     const g = window.__game;
-    if (g.quality === "high") g.action("quality");
+    g.action("quality", 0);
+    if (g.settings.value.adaptiveQuality) g.action("adaptiveQuality");
     // Headless CI has a CPU rasterizer rather than a gaming GPU.
-    g.renderer.setPixelRatio(0.5);
+    g.renderer.setPixelRatio(0.4);
+    g.pipeline.resize();
   });
 }
 async function begin(page: Page) {
@@ -93,6 +95,51 @@ async function attack(page: Page, heavy = false) {
     )
     .toBe(true);
   if (heavy) await page.keyboard.up("Shift");
+}
+
+/** Guarding opponents can survive the old one-light-hit recipe. Break their
+ * finite guard with an actual charged attack rather than assuming old damage. */
+async function chargedFinisher(page: Page, index: number) {
+  if (
+    await page.evaluate(
+      (index) => window.__game.enemies.enemies[index].health <= 0,
+      index,
+    )
+  )
+    return;
+  await expect
+    .poll(() => page.evaluate(() => window.__game.player.attackCooldown))
+    .toBe(0);
+  await expect
+    .poll(() => page.evaluate(() => window.__game.player.stamina))
+    .toBeGreaterThan(38);
+  const target = await page.evaluate(
+    (index) => ({
+      x: window.__game.enemies.enemies[index].position.x,
+      z: window.__game.enemies.enemies[index].position.z,
+    }),
+    index,
+  );
+  await placePlayer(page, target.x, target.z + 2);
+  const swing = await page.evaluate(() => window.__game.player.swingId);
+  await page.keyboard.down("t");
+  await page.waitForFunction(
+    () => {
+      const p = window.__game.player;
+      return (p.charging && p.chargeRatio >= 0.78) || (p.attacking && p.heavy);
+    },
+    undefined,
+    { polling: "raf", timeout: 20_000 },
+  );
+  await page.keyboard.up("t");
+  await expect
+    .poll(() => page.evaluate(() => window.__game.player.swingId))
+    .toBe(swing + 1);
+  // Complete the real swing before the caller stages another live actor; an
+  // enemy entering the same active cleave is correctly eligible for damage.
+  await expect
+    .poll(() => page.evaluate(() => window.__game.player.attackCooldown))
+    .toBe(0);
 }
 
 // Each test owns its browser context and save storage.
@@ -311,6 +358,10 @@ test("enemy detection, geometric melee and projectile hits, death and respawn", 
   expect(await page.evaluate(() => window.__game.player.mana)).toBeLessThan(
     mana,
   );
+  await chargedFinisher(page, 0);
+  await expect
+    .poll(() => page.evaluate(() => window.__game.enemies.enemies[0].health))
+    .toBe(0);
   expect(
     await page.evaluate(() => window.__game.enemies.enemies[0].state),
   ).toBe("dead");
@@ -348,6 +399,13 @@ test("all four wards and two-phase guardian can be defeated through real attacks
   page.on("pageerror", (e) => errors.push(e.message));
   await begin(page);
   for (let index = 0; index < 4; index++) {
+    if (
+      await page.evaluate(
+        () =>
+          window.__game.player.health < 70 && window.__game.player.potions > 0,
+      )
+    )
+      await page.keyboard.press("h");
     await placeEnemy(page, index, 0, 3);
     await placePlayer(page, 0, 5);
     await expect
@@ -358,7 +416,8 @@ test("all four wards and two-phase guardian can be defeated through real attacks
         ),
       )
       .not.toBe("patrol");
-    // Use a real ember bolt plus a sword hit, preserving stamina for the boss.
+    // Keep the original spell + light attack sequence, then punish a surviving
+    // guard with a paid charged heavy. The upgraded AI may block the first hit.
     await expect
       .poll(() => page.evaluate(() => window.__game.player.spellCooldown))
       .toBe(0);
@@ -380,6 +439,10 @@ test("all four wards and two-phase guardian can be defeated through real attacks
     );
     await placePlayer(page, target.x, target.z + 2);
     await attack(page);
+    await expect
+      .poll(() => page.evaluate(() => window.__game.player.attackCooldown))
+      .toBe(0);
+    await chargedFinisher(page, index);
     await expect
       .poll(() =>
         page.evaluate(
@@ -407,7 +470,7 @@ test("all four wards and two-phase guardian can be defeated through real attacks
     .poll(() => page.evaluate(() => window.__game.enemies.boss.state))
     .not.toBe("dormant");
   let witnessedPhaseTwo = false;
-  for (let swing = 0; swing < 9; swing++) {
+  for (let swing = 0; swing < 14; swing++) {
     if (await page.evaluate(() => window.__game.enemies.boss.health <= 0))
       break;
     if (

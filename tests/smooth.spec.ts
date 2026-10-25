@@ -307,9 +307,11 @@ test("buffered light chain hits a real enemy and a timed right-click parries its
   await expect
     .poll(() => page.evaluate(() => window.__game.player.comboIndex))
     .toBe(1);
+  // One of the two hits may now meet a finite AI guard. More than 31 damage
+  // still proves both swings connected: neither light can deal that alone.
   await expect
     .poll(() => page.evaluate(() => window.__game.enemies.enemies[0].health))
-    .toBeLessThan(originalHealth - 40);
+    .toBeLessThan(originalHealth - 31);
   await expect
     .poll(() => page.evaluate(() => window.__game.player.attacking))
     .toBe(false);

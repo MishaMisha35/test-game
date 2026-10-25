@@ -12,7 +12,24 @@ export type SoundEffect =
   | "dodge"
   | "chest"
   | "parry"
-  | "land";
+  | "land"
+  | "charge"
+  | "critical"
+  | "guardBreak"
+  | "boss";
+
+const EFFECT_INTERVALS: Partial<Record<SoundEffect, number>> = {
+  charge: 0.42,
+  critical: 0.16,
+  guardBreak: 0.24,
+  boss: 5,
+  magic: 0.16,
+  death: 1,
+  level: 0.5,
+  victory: 2,
+  chest: 0.3,
+  step: 0.18,
+};
 
 export class AudioManager {
   enabled = true;
@@ -26,6 +43,8 @@ export class AudioManager {
   private nextChime = 3;
   private phrase = 0;
   private lastStep = -Infinity;
+  private lastPlayed = new Map<SoundEffect, number>();
+  private oneShotNodes = new Set<AudioScheduledSourceNode>();
 
   constructor() {}
 
@@ -90,7 +109,32 @@ export class AudioManager {
   play(type: SoundEffect): void {
     if (!this.enabled || !this.context || this.context.state !== "running")
       return;
+    const now = this.context.currentTime;
+    const last = this.lastPlayed.get(type) ?? -Infinity;
+    if (now - last < (EFFECT_INTERVALS[type] ?? 0.065)) return;
+    this.lastPlayed.set(type, now);
     switch (type) {
+      case "charge":
+        this.tone(82.41, 146.83, 0.5, 0.055, "sine");
+        this.tone(123.47, 220, 0.47, 0.025, "triangle", 0.025);
+        break;
+      case "critical":
+        this.noise(0.1, 0.17, 1050, "bandpass");
+        this.tone(112, 48, 0.22, 0.14, "triangle");
+        this.tone(880, 880, 0.65, 0.045, "sine", 0.025);
+        this.tone(1318.51, 1318.51, 0.46, 0.018, "sine", 0.06);
+        break;
+      case "guardBreak":
+        this.noise(0.2, 0.18, 850, "bandpass");
+        this.tone(196, 68, 0.28, 0.09, "triangle");
+        this.tone(310, 155, 0.16, 0.035, "sine", 0.035);
+        break;
+      case "boss":
+        [55, 65.406, 82.407, 110].forEach((frequency, i) =>
+          this.tone(frequency, frequency * 0.98, 2.6, 0.045, "sine", i * 0.075),
+        );
+        this.noise(1.25, 0.045, 250, "lowpass");
+        break;
       case "parry":
         this.tone(880, 510, 0.16, 0.085, "sine");
         this.tone(1330, 990, 0.22, 0.035, "sine");
@@ -156,7 +200,7 @@ export class AudioManager {
 
   /** Optional lifecycle cleanup for hosts that replace the game without reloading. */
   destroy(): void {
-    for (const source of this.ambienceNodes) {
+    for (const source of [...this.ambienceNodes, ...this.oneShotNodes]) {
       try {
         source.stop();
       } catch {
@@ -165,9 +209,12 @@ export class AudioManager {
       source.disconnect();
     }
     this.ambienceNodes = [];
+    this.oneShotNodes.clear();
     void this.context?.close().catch(() => {});
     this.context = undefined;
     this.master = undefined;
+    this.lastPlayed.clear();
+    this.lastStep = -Infinity;
   }
 
   private makeNoise(context: AudioContext): AudioBuffer {
@@ -234,9 +281,11 @@ export class AudioManager {
     wave: OscillatorType,
     delay = 0,
   ): void {
+    if (this.oneShotNodes.size >= 64) return;
     const context = this.context!;
     const at = context.currentTime + delay;
     const oscillator = context.createOscillator();
+    this.oneShotNodes.add(oscillator);
     const envelope = context.createGain();
     oscillator.type = wave;
     oscillator.frequency.setValueAtTime(from, at);
@@ -252,6 +301,7 @@ export class AudioManager {
     envelope.gain.exponentialRampToValueAtTime(0.0001, at + duration);
     oscillator.connect(envelope).connect(this.master!);
     oscillator.onended = () => {
+      this.oneShotNodes.delete(oscillator);
       oscillator.disconnect();
       envelope.disconnect();
     };
@@ -265,8 +315,10 @@ export class AudioManager {
     frequency: number,
     type: BiquadFilterType,
   ): void {
+    if (this.oneShotNodes.size >= 64) return;
     const context = this.context!;
     const source = context.createBufferSource();
+    this.oneShotNodes.add(source);
     source.buffer = this.noiseBuffer!;
     const filter = context.createBiquadFilter();
     filter.type = type;
@@ -278,6 +330,7 @@ export class AudioManager {
     envelope.gain.exponentialRampToValueAtTime(0.0001, at + duration);
     source.connect(filter).connect(envelope).connect(this.master!);
     source.onended = () => {
+      this.oneShotNodes.delete(source);
       source.disconnect();
       filter.disconnect();
       envelope.disconnect();
